@@ -1183,7 +1183,6 @@ def tab_sensitivity(actuals, forecasts, ctrl):
         )
         st.dataframe(styled, use_container_width=True)
     except ImportError:
-        st.info("Heatmap coloring unavailable (matplotlib not installed). Showing values only.")
         st.dataframe(matrix_df.apply(lambda col: col.map(_fmt_cell)), use_container_width=True)
     st.caption(
         f"Cells scale linearly between worst corner (${matrix_df.values.min()/1e9:,.1f}B) "
