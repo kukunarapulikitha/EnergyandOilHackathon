@@ -26,14 +26,14 @@
 - [x] **Real public data source** — EIA Open Data API v2 (production, WTI spot price)
 - [x] **Multiple U.S. regions** — PADD 1–5 (crude oil) + TX, PA, LA, OK, WV (natural gas)
 - [x] **Interactive year selector** — 2010 to 2035 slider; actuals to selected year, OLS forecast beyond
-- [x] **Documented forecasting methodology** — Linear OLS with R² per region (see §Forecasting Approach)
+- [x] **Documented forecasting methodology** — Linear OLS with R² per region Forecasting Approach
 - [x] **Projected Production Estimate KPI** — per region × year (required mandatory KPI)
 - [x] **At least one AI feature with live data** — Conversational AI Analyst (Groq / Llama 3.3 70B) grounded in live Gold-layer snapshot
 - [x] **Data/inference boundary** — `(Data)` vs `(AI Analysis)` tags, color-coded in UI
 - [x] **Documentation** — data sources, forecasting approach, KPI definitions, architecture (this README)
 - [x] **Tier 2 stretch** — Well Economics Calculator (Arps decline + NPV/IRR/payback), Excel export + import, sensitivity analysis heatmap
 - [x] **Unit tests** — `pytest tests/` (pipeline tests + well model tests, 25+ assertions)
-- [x] **AI tools disclosure** — see §AI Coding Tools Usage
+- [x] **AI tools disclosure** — Claude code to generate boilerplate code and improve efficiency
 
 **Environment variables required for deployment:**
 
