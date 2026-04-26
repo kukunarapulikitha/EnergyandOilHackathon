@@ -329,6 +329,70 @@ def render_kpi_strip(actuals, forecasts, ctrl) -> None:
         c4.caption(f"{'⭐' if avg_score >= 70 else '🔶' if avg_score >= 50 else '🔴'} {score_label}")
 
 
+def render_investment_thesis(actuals, forecasts, ctrl) -> None:
+    """Narrative investment thesis card — a verdict + 3 bullets pulling live KPIs.
+
+    Picks the focused region (map click) if available, else top-scored region
+    in the current fuel filter. Replaces the bare 'Investment Score: 78/100'
+    with WHY the score is what it is.
+    """
+    from src.kpi.thesis import build_investment_thesis
+
+    fuel = ctrl["fuel"]
+    year = ctrl["year"]
+    ff = forecasts[forecasts["fuel_type"] == fuel]
+    if ff.empty:
+        return
+
+    # Pick region: map focus first, else highest investment score
+    focus_id = st.session_state.get("map_focus_region")
+    focus_fuel = st.session_state.get("map_focus_fuel")
+    if focus_id and focus_fuel == fuel and focus_id in ff["region_id"].values:
+        region_id = focus_id
+        source_caption = "📍 Focused via map click. Click another state to update."
+    else:
+        region_id = ff.sort_values("investment_score", ascending=False).iloc[0]["region_id"]
+        source_caption = "🏆 Top-scored region for current fuel. Click any state on the map to switch."
+
+    thesis = build_investment_thesis(region_id, fuel, year, actuals, forecasts)
+
+    # ---- Header row: verdict pill + title --------------------------------
+    h1, h2 = st.columns([0.75, 0.25])
+    with h1:
+        st.markdown(f"### 💡 Investment Thesis · {year}")
+        st.caption(source_caption)
+    with h2:
+        verdict = thesis["verdict"]
+        color = thesis["verdict_color"]
+        st.markdown(
+            f"""
+            <div style='text-align:right;padding-top:8px;'>
+                <span style='background:{color};color:white;padding:6px 16px;
+                             border-radius:20px;font-weight:600;font-size:0.95rem;'>
+                    {verdict}
+                </span>
+                <div style='font-size:0.78rem;opacity:0.7;margin-top:4px;'>
+                    Score {thesis['score']:.0f}/100
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # ---- Title sentence ---------------------------------------------------
+    st.markdown(f"**{thesis['title']}**")
+
+    # ---- Bullets ----------------------------------------------------------
+    if thesis["bullets"]:
+        for b in thesis["bullets"]:
+            st.markdown(f"- {b}")
+    else:
+        st.info("No KPI data available for this region/year combination.")
+
+    # ---- Rationale footer -------------------------------------------------
+    st.caption(thesis["rationale"])
+
+
 def tab_overview(actuals, forecasts, ctrl):
     st.subheader("📊 Overview")
 
@@ -1072,21 +1136,63 @@ def tab_sensitivity(actuals, forecasts, ctrl):
     )
 
     row = ff[ff["region_id"] == region_id].iloc[0]
-    st.plotly_chart(
-        sensitivity_heatmap(row, target_year=ctrl["year"]),
-        use_container_width=True,
+    region_label = (
+        fa[fa["region_id"] == region_id]["region_name"].iloc[0]
+        if region_id in fa["region_id"].values else region_id
+    )
+
+    # Build 2D revenue shock matrix (price shocks × production shocks)
+    from src.kpi.thesis import build_revenue_sensitivity_matrix, DEFAULT_WTI
+    matrix_df, baseline_usd = build_revenue_sensitivity_matrix(
+        row, target_year=ctrl["year"], wti_price=DEFAULT_WTI,
+    )
+
+    base_production = max(
+        float(row["slope"]) * ctrl["year"] + float(row["intercept"]), 0.0
+    )
+
+    st.markdown(
+        f"**Revenue sensitivity · {region_label} · {ctrl['year']}**"
+    )
+    st.caption(
+        f"Annualized revenue at shocks to WTI price (rows) and oil production (columns). "
+        f"Baseline = **${baseline_usd/1e9:,.1f}B**/yr at **${DEFAULT_WTI:.2f}/bbl** "
+        f"× **{base_production:,.0f} Mb/d**."
+    )
+
+    # Format every cell as $X.YB / $XXM and apply gradient + outline baseline
+    def _fmt_cell(v: float) -> str:
+        return f"${v/1e9:.1f}B" if v >= 1e9 else f"${v/1e6:.0f}M"
+
+    def _highlight_baseline(_v):
+        return ""  # keep table clean; baseline indicated in caption
+
+    styled = (
+        matrix_df.style
+        .background_gradient(cmap="RdYlGn", axis=None, low=0.1, high=0.9)
+        .format(_fmt_cell)
+        .set_properties(**{"text-align": "right", "font-size": "0.92rem"})
+        .set_table_styles([
+            {"selector": "th", "props": [("font-weight", "600"), ("text-align", "center")]},
+        ])
+    )
+    st.dataframe(styled, use_container_width=True)
+    st.caption(
+        f"Cells scale linearly between worst corner (${matrix_df.values.min()/1e9:,.1f}B) "
+        f"and best corner (${matrix_df.values.max()/1e9:,.1f}B). "
+        f"Center cell (0% / 0%) is the baseline. "
+        f"Revenue is linear in both axes: `base × (1 + price_shock) × (1 + production_shock)`."
     )
 
     with st.expander("📖 How to read this"):
         st.markdown(
             """
-            **X-axis:** WTI crude spot-price assumption.
-            **Y-axis:** adjustment applied to the fitted slope — negative values simulate a
-            decline (mature basin depletion), positive values simulate acceleration.
-            **Cell value:** estimated annual revenue (in $B/yr) at the year selected in the sidebar.
+            **Rows (↓ Price):** % shock applied to WTI spot price. -40% means WTI drops to about $47.
+            **Columns (→ Production):** % shock applied to projected production at the selected year.
+            **Cell value:** annualized revenue in USD under that combined scenario.
 
-            **Color:** red = weak revenue, green = strong. Use this to answer
-            "at what WTI price does this region still make sense even under declining production?"
+            **Use it to answer:** "What happens to my revenue if WTI drops 20% and production
+            comes in 10% below my forecast?" → look at row -20%, column -10%.
             """
         )
 
@@ -1450,6 +1556,10 @@ def main() -> None:
                     "Change WTI price in Inputs → KPIs recalculate live."
                 ),
             )
+
+        # 1b. Investment Thesis — narrative verdict for the focused region
+        with st.container(border=True):
+            render_investment_thesis(actuals, forecasts, ctrl)
 
         # 2. Production map — top, click to focus region
         with st.container(border=True):
