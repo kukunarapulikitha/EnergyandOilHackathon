@@ -69,20 +69,30 @@ energy-intelligence-system-kukunarapulikitha-main/
 │   │   └── linear.py          # OLS regression + ForecastResult dataclass
 │   ├── kpi/
 │   │   └── calculations.py    # 5 KPIs incl. Projected Production (required)
-│   ├── ai/                    # TODO Phase 3: Groq client + prompts
+│   ├── ai/                    # ✅ Phase 3 COMPLETE
+│   │   ├── client.py          # Groq API wrapper (Llama 3.3 70B)
+│   │   ├── prompts.py         # Context builder, system prompt, basin map, tag parser
+│   │   └── intents.py         # Intent classifier + structured artifact builders
+│   ├── economics/             # ✅ Phase 4 COMPLETE
+│   │   ├── well_model.py      # Pure-Python Arps decline + NPV/IRR/payback
+│   │   └── region_defaults.py # Industry-norm presets per PADD/state
 │   └── ui/
 │       ├── charts.py          # Plotly helpers (actuals + forecast split, heat map)
-│       ├── data_loader.py     # Cached Gold/Silver/metadata readers
+│       ├── data_loader.py     # Cached Gold/Silver/metadata readers + Excel import helpers
 │       ├── provenance.py      # Provenance tooltips + data sources panel
 │       ├── export.py          # Formula-driven Excel workbook builder
-│       └── map.py             # Phase 2.6: Plotly choropleth + PADD state mapping
+│       ├── map.py             # Plotly choropleth + PADD state mapping + basin/rig layers
+│       ├── rankings.py        # Ranked bar chart
+│       ├── badges.py          # Region status badge classifier
+│       └── well_calculator.py # Well Economics tab UI (Arps + NPV/IRR/payback)
 │
 ├── scripts/
 │   ├── verify_pipeline.py     # End-to-end: Bronze → Silver → validate → DQS → Gold
 │   └── explore_data.py        # 6 pandas reports for manual data inspection
 │
 ├── tests/
-│   └── test_pipeline.py       # 10 pytest sanity tests (all green)
+│   ├── test_pipeline.py       # 25+ pipeline sanity tests (all green)
+│   └── test_well_model.py     # 13 well model math tests (12 passed, 1 skipped w/o IRR solver)
 │
 ├── data/                      # (mostly gitignored, regenerable)
 │   ├── bronze/                # raw API payloads, timestamped audit trail
@@ -96,7 +106,7 @@ energy-intelligence-system-kukunarapulikitha-main/
 │   ├── validation_report.json # full 6-check report
 │   └── ingest.log             # per-fetch log
 │
-└── app.py                     # TODO Phase 2: Streamlit entry point
+└── app.py                     # Main entry point — st.tabs() (Dashboard / Well Economics / AI Analyst)
 ```
 
 ---
@@ -154,19 +164,36 @@ energy-intelligence-system-kukunarapulikitha-main/
 - [x] **Active rig counts** overlay (Baker Hughes snapshot) — `data/reference/rig_counts.json`
 - [x] Layer multiselect so Basins + Rigs toggle independently of base metric
 
-### Phase 3 — Conversational AI Agent  (NEW Tier 1 — was Phase 3)
-- [ ] `src/ai/client.py` — Groq client for Llama 3.3 70B
-- [ ] `src/ai/prompts.py` — `build_regional_context(df, year)` + data/inference tagging
-- [ ] Tab 4 **AI Analyst**: `st.chat_input` chat + "Generate Investment Summary" button
-- [ ] UI: amber badge for AI inference, blue for data-backed claims
-- [ ] Collapsible "Data sent to AI" per response
-- [ ] Deploy to Streamlit Community Cloud (set `EIA_API_KEY` + `GROQ_API_KEY` secrets)
-- [ ] Fill `docs/architecture.md`, `docs/kpi_definitions.md`, `docs/reflection.md`
-- [ ] Record 5-min walkthrough video, update README with live URL
+### Phase 3 — Conversational AI Agent  ✅ COMPLETE
+- [x] `src/ai/client.py` — Groq API wrapper (Llama 3.3 70B), returns AIResponse dataclass, handles GroqUnavailable
+- [x] `src/ai/prompts.py` — `build_regional_context()`, `build_system_prompt()`, `detect_what_if()`, `compute_sensitivity_context()`, `parse_tagged_response()`, `BASIN_TO_GEOGRAPHY`, `resolve_basin()`
+- [x] `src/ai/intents.py` — `classify_intent()`, `build_artifact()` → table / metrics / chart artifacts
+- [x] Tab **AI Analyst**: `st.chat_input` chat + 4 quick-action buttons
+- [x] UI: blue `(Data)` boxes + amber `(AI Analysis)` boxes, structured artifact rendered above prose
+- [x] Collapsible "↳ Data sent to AI" expander per response (proves grounding)
+- [x] Sensitivity what-if: detects rate_change in query, recomputes adjusted projections, injects into context
+- [x] Basin→PADD translation in system prompt (Permian→R30 Gulf Coast, Bakken→R40, etc.)
+- [x] Deployed to Streamlit Community Cloud with `EIA_API_KEY` + `GROQ_API_KEY` secrets
 
-### Tier 3 — Stretch (if time permits)
-- [ ] Tab 5 **Anomalies**: rolling ±2σ outliers, Llama-generated one-sentence explanations
-- [ ] Investment Score gauge on Overview + "Explain this score" AI button
+### Phase 4 — Well Economics Calculator  ✅ COMPLETE
+- [x] `src/economics/well_model.py` — Arps hyperbolic decline + EUR + monthly_cashflow + NPV + IRR + payback (pure Python)
+- [x] `src/economics/region_defaults.py` — industry-norm presets for R10–R50 + TX/PA/LA/OK/WV gas states
+- [x] `src/ui/well_calculator.py` — full Streamlit UI: region preset, 2-col inputs, 5 metric cards, 2 Plotly charts, CSV export
+- [x] Map prefill: clicking a region on the Dashboard map auto-loads that region's well defaults in the Well Economics tab
+- [x] `tests/test_well_model.py` — 13 unit tests (12 passed, 1 skipped without IRR solver library)
+- [x] `app.py` restructured to `st.tabs()` — 3 tabs: Dashboard / Well Economics / AI Analyst
+
+### Phase 4.5 — Excel Import  ✅ COMPLETE
+- [x] `parse_excel_upload()` in `src/ui/data_loader.py` — parses uploaded .xlsx, validates required columns
+- [x] `merge_uploaded_actuals()` — overlays uploaded rows onto Gold-layer actuals (uploaded wins on collision)
+- [x] Sidebar file uploader — accepts .xlsx, shows success/error, "Clear imported data" button
+- [x] Merged actuals flow through entire dashboard (map, charts, AI analyst, sensitivity)
+
+### Polish — ✅ COMPLETE
+- [x] `help=` tooltips on all KPI metrics (YoY, R², Investment Score, Decline Rate, RPI, Revenue, Production)
+- [x] Inline forecast chart removed from map tab (was duplicating Regional Detail — now deferred to Compare expander)
+- [x] README updated with submission repo URL, submission checklist, verifiable data note
+- [x] FRED API mention removed from README (WTI comes from EIA, no extra key needed)
 
 ---
 

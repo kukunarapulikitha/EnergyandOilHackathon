@@ -10,9 +10,37 @@
 | | |
 |---|---|
 | **Live App** | https://energyandoilhackathon-dpa2nr8ryjauaxombfw9ru.streamlit.app/ |
-| **Repository** | https://github.com/kukunarapulikitha/EnergyandOilHackathon |
+| **Submission Repository** | https://github.com/Community-Dreams-Foundation-Hackathons/energy-intelligence-system-kukunarapulikitha |
+| **Author Repository** | https://github.com/kukunarapulikitha/EnergyandOilHackathon |
 
 > ⚠️ The live URL is functional and tested as of submission. Do not build from source — use the hosted link above.
+
+---
+
+## 📋 Submission Guidelines
+
+**Submission checklist (per CDF Energy AI Hackathon rules):**
+
+- [x] **Live hosted URL** — Streamlit Community Cloud: https://energyandoilhackathon-dpa2nr8ryjauaxombfw9ru.streamlit.app/
+- [x] **Submission repository** — https://github.com/Community-Dreams-Foundation-Hackathons/energy-intelligence-system-kukunarapulikitha
+- [x] **Real public data source** — EIA Open Data API v2 (production, WTI spot price)
+- [x] **Multiple U.S. regions** — PADD 1–5 (crude oil) + TX, PA, LA, OK, WV (natural gas)
+- [x] **Interactive year selector** — 2010 to 2035 slider; actuals to selected year, OLS forecast beyond
+- [x] **Documented forecasting methodology** — Linear OLS with R² per region (see §Forecasting Approach)
+- [x] **Projected Production Estimate KPI** — per region × year (required mandatory KPI)
+- [x] **At least one AI feature with live data** — Conversational AI Analyst (Groq / Llama 3.3 70B) grounded in live Gold-layer snapshot
+- [x] **Data/inference boundary** — `(Data)` vs `(AI Analysis)` tags, color-coded in UI
+- [x] **Documentation** — data sources, forecasting approach, KPI definitions, architecture (this README)
+- [x] **Tier 2 stretch** — Well Economics Calculator (Arps decline + NPV/IRR/payback), Excel export + import, sensitivity analysis heatmap
+- [x] **Unit tests** — `pytest tests/` (pipeline tests + well model tests, 25+ assertions)
+- [x] **AI tools disclosure** — see §AI Coding Tools Usage
+
+**Environment variables required for deployment:**
+
+```
+EIA_API_KEY=<your EIA Open Data API key>  # https://www.eia.gov/opendata/register.php
+GROQ_API_KEY=<your Groq API key>          # https://console.groq.com/keys
+```
 
 ---
 
@@ -91,12 +119,14 @@ The Energy Intelligence System is a fully hosted, decision-support web applicati
 
 | Source | What it provides | Why chosen |
 |--------|-----------------|------------|
-| **EIA Open Data API** (`api.eia.gov`) | Monthly oil and gas production by PADD region and state, going back to 1981 | Primary authoritative source for U.S. regional production. Free tier with API key. Geographic granularity maps directly to PADD regions used throughout the system. |
-| **EIA Petroleum Supply Monthly** (`eia.gov/petroleum`) | Historical monthly production volumes | Provides the long-horizon historical data needed to fit reliable linear trend models and compute multi-year decline rates. |
-| **FRED API** (`api.stlouisfed.org`) | WTI crude price history, interest rates | WTI price context is injected into AI analyst responses and used as the default commodity price in the well economics calculator. Free API key. |
-| **EIA Spot Prices** (`eia.gov/dnav/pet`) | WTI and Brent crude daily spot prices | Cross-reference for current price used in well economics defaults and revenue potential KPI. Public, no auth required. |
+| **EIA Open Data API v2** (`api.eia.gov`) | Monthly crude oil and natural gas production by PADD region and state, going back to 1981 | Primary authoritative source for U.S. regional production. Free with API key. Geographic granularity maps directly to the PADD regions used throughout the system. |
+| **EIA WTI Spot Price** (`api.eia.gov/v2/petroleum/pri/spt`) | Daily WTI crude spot price from Cushing, OK | Same EIA API key — no additional credentials needed. WTI price is used to compute revenue potential KPI (`production × WTI × days_in_year`) and injected into the AI analyst context. |
+| **Baker Hughes Rig Count** (static snapshot in `data/reference/`) | Active land rig counts by basin | Provides the "Rigs" overlay layer on the production map. Snapshot is committed to the repo; refreshed manually before each pipeline run. |
+| **EIA Basin Boundaries** (static GeoJSON in `data/reference/`) | Approximate polygon footprints for 7 EIA DPR basins (Permian, Eagle Ford, Bakken, etc.) | Provides the "Basins" overlay layer on the production map. Static reference — not refreshed automatically. |
 
-All sources are public or have free open tiers. No proprietary data is used anywhere in the pipeline.
+All sources are public or have free open tiers. **No FRED API key is required.** No proprietary data is used anywhere in the pipeline.
+
+> **Data verifiability:** Every number displayed by the app can be cross-checked against the EIA Open Data browser at https://www.eia.gov/opendata/browser/. The `data/bronze/` directory stores the raw API payloads (timestamped) so the full lineage from API response to dashboard metric is auditable.
 
 ---
 

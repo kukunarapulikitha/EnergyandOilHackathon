@@ -46,6 +46,8 @@ from src.ui.data_loader import (
     load_annual_silver,
     load_forecasts,
     load_metadata,
+    merge_uploaded_actuals,
+    parse_excel_upload,
     pipeline_ready,
 )
 from src.ui.badges import badge_markdown, classify_region
@@ -210,6 +212,41 @@ def render_sidebar(actuals: pd.DataFrame, forecasts: pd.DataFrame) -> dict:
             "is reported on the chart legend and Overview table."
         )
 
+        # ---- Excel import ------------------------------------------------
+        st.divider()
+        st.markdown("**📂 Import custom data (Excel)**")
+        st.caption(
+            "Upload a `.xlsx` file to overlay your own production figures on "
+            "the Gold-layer data. Required columns: `region_id`, `fuel_type`, "
+            "`year`, `production`. Export the workbook from the Dashboard tab "
+            "for a pre-formatted template."
+        )
+        uploaded_file = st.file_uploader(
+            "Upload .xlsx",
+            type=["xlsx", "xls"],
+            key="excel_upload",
+            label_visibility="collapsed",
+        )
+        if uploaded_file is not None:
+            parsed_df, err = parse_excel_upload(uploaded_file)
+            if err:
+                st.error(f"❌ {err}")
+            elif parsed_df is not None and not parsed_df.empty:
+                st.session_state["uploaded_actuals"] = parsed_df
+                st.success(
+                    f"✅ Loaded **{len(parsed_df):,}** rows from "
+                    f"`{uploaded_file.name}` — overlaying Gold data."
+                )
+            else:
+                st.error("❌ File parsed but contained no valid rows.")
+
+        if st.session_state.get("uploaded_actuals") is not None:
+            n = len(st.session_state["uploaded_actuals"])
+            st.info(f"📂 **{n:,} uploaded rows** are active.")
+            if st.button("🗑️ Clear imported data", use_container_width=True):
+                del st.session_state["uploaded_actuals"]
+                st.rerun()
+
     return {
         "fuel": fuel,
         "year": selected_year,
@@ -265,7 +302,15 @@ def render_kpi_strip(actuals, forecasts, ctrl) -> None:
     unit = "Mb/d" if ctrl["fuel"] == "crude_oil" else "MMcf"
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric(label, f"{total_value:,.0f} {unit}")
+    c1.metric(
+        label,
+        f"{total_value:,.0f} {unit}",
+        help=(
+            "Sum of production across all selected regions for the chosen year. "
+            "Shows 'actual' when EIA observed data exists; 'projected' when the "
+            "year is beyond the latest data point (OLS linear trend)."
+        ),
+    )
 
     avg_growth = fa[fa["region_id"].isin(selected) & (fa["year"] == year)][
         "growth_pct"
@@ -273,15 +318,35 @@ def render_kpi_strip(actuals, forecasts, ctrl) -> None:
     c2.metric(
         "Avg YoY Growth",
         f"{avg_growth:+.1f}%" if pd.notna(avg_growth) else "—",
+        help=(
+            "Year-over-year percentage change in production: "
+            "(Production_N − Production_N-1) / Production_N-1 × 100. "
+            "Positive = growth, negative = decline. Averaged across selected regions."
+        ),
     )
 
     avg_r2 = ff[ff["region_id"].isin(selected)]["r_squared"].mean()
-    c3.metric("Avg Forecast R²", f"{avg_r2:.2f}" if pd.notna(avg_r2) else "—")
+    c3.metric(
+        "Avg Forecast R²",
+        f"{avg_r2:.2f}" if pd.notna(avg_r2) else "—",
+        help=(
+            "Coefficient of determination (R²) for the OLS linear fit, 0–1. "
+            "A value ≥ 0.85 means the trend is highly linear and the projection "
+            "is reliable; < 0.5 signals a noisy or non-linear trend — treat "
+            "that region's forecast with caution."
+        ),
+    )
 
     avg_score = ff[ff["region_id"].isin(selected)]["investment_score"].mean()
     c4.metric(
         "Avg Investment Score",
         f"{avg_score:.0f}/100" if pd.notna(avg_score) else "—",
+        help=(
+            "Composite 0–100 attractiveness signal: "
+            "growth_rate × 0.35 + (1 − decline_rate) × 0.25 + "
+            "(1 − volatility) × 0.20 + forecast_R² × 0.20. "
+            "Higher = stronger investment case."
+        ),
     )
 
 
@@ -312,7 +377,15 @@ def tab_overview(actuals, forecasts, ctrl):
     unit = "Mb/d" if ctrl["fuel"] == "crude_oil" else "MMcf"
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric(label, f"{total_value:,.0f} {unit}")
+    c1.metric(
+        label,
+        f"{total_value:,.0f} {unit}",
+        help=(
+            "Sum of production across selected regions. "
+            "'Actual' = EIA observed data; 'Projected' = OLS trend (slope × year + intercept). "
+            f"Unit: {'thousand barrels/day' if ctrl['fuel'] == 'crude_oil' else 'billion cubic feet/month'}."
+        ),
+    )
 
     avg_growth = fa[
         fa["region_id"].isin(selected) & (fa["year"] == year)
@@ -320,15 +393,32 @@ def tab_overview(actuals, forecasts, ctrl):
     c2.metric(
         "Avg YoY Growth",
         f"{avg_growth:+.1f}%" if pd.notna(avg_growth) else "—",
+        help=(
+            "Year-over-year % change: (Production_N − Production_N-1) / Production_N-1 × 100. "
+            "Positive = expanding output; negative = contraction. "
+            "Averaged across the selected regions."
+        ),
     )
 
     avg_r2 = ff[ff["region_id"].isin(selected)]["r_squared"].mean()
-    c3.metric("Avg Forecast R²", f"{avg_r2:.2f}" if pd.notna(avg_r2) else "—")
+    c3.metric(
+        "Avg Forecast R²",
+        f"{avg_r2:.2f}" if pd.notna(avg_r2) else "—",
+        help=(
+            "OLS linear fit quality (0–1). "
+            "≥ 0.85 means the production trend is strongly linear and the projection is reliable. "
+            "< 0.50 means the trend is noisy — treat forecasts for those regions with caution."
+        ),
+    )
 
     avg_score = ff[ff["region_id"].isin(selected)]["investment_score"].mean()
     c4.metric(
         "Avg Investment Score",
         f"{avg_score:.0f}/100" if pd.notna(avg_score) else "—",
+        help=(
+            "Composite 0–100: growth × 0.35 + (1−decline) × 0.25 + (1−volatility) × 0.20 + R² × 0.20. "
+            "Higher = more attractive investment case. Averaged across selected regions."
+        ),
     )
 
     # Excel export — formula-driven workbook (Tier 2)
@@ -465,7 +555,15 @@ def tab_regional_detail(actuals, forecasts, annual_silver, ctrl):
 
     unit = "Mb/d" if ctrl["fuel"] == "crude_oil" else "MMcf"
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric(label, f"{value:,.0f} {unit}")
+    c1.metric(
+        label,
+        f"{value:,.0f} {unit}",
+        help=(
+            "EIA-reported observed production for this region and year. "
+            "Source: EIA Open Data API v2. "
+            f"Unit: {'Mb/d = thousand barrels per day' if ctrl['fuel'] == 'crude_oil' else 'MMcf = million cubic feet per month'}."
+        ),
+    )
     if not hist_row.empty:
         c1.caption(
             provenance_caption(
@@ -474,13 +572,29 @@ def tab_regional_detail(actuals, forecasts, annual_silver, ctrl):
             )
         )
     if not fc_row.empty:
-        c2.metric("Forecast R²", f"{fc_row['r_squared'].iloc[0]:.2f}")
+        c2.metric(
+            "Forecast R²",
+            f"{fc_row['r_squared'].iloc[0]:.2f}",
+            help=(
+                "Coefficient of determination for the OLS linear fit (0–1). "
+                "Measures how well a straight line explains the production history. "
+                "≥ 0.85 = reliable forecast; < 0.5 = noisy trend, wider uncertainty."
+            ),
+        )
         c2.caption(provenance_caption(source=fc_row["source"].iloc[0]))
     if growth is not None and pd.notna(growth):
-        c3.metric("YoY growth", f"{growth:+.1f}%")
+        c3.metric(
+            "YoY growth",
+            f"{growth:+.1f}%",
+            help="(Production_N − Production_N-1) / Production_N-1 × 100. Positive = expanding output.",
+        )
     if rev is not None and pd.notna(rev):
-        c4.metric("Revenue potential", f"${rev/1e9:,.1f}B")
-        c4.caption("💲 Live WTI × projected volume")
+        c4.metric(
+            "Revenue potential",
+            f"${rev/1e9:,.1f}B",
+            help="Projected production × current WTI spot price × 365 days. Gross revenue estimate before costs.",
+        )
+        c4.caption("💲 EIA WTI spot × projected volume")
 
     # Additional Tier 2 KPIs (decline rate + relative performance index)
     if not hist_row.empty:
@@ -489,9 +603,28 @@ def tab_regional_detail(actuals, forecasts, annual_silver, ctrl):
         rpi = hist_row.get("relative_performance_index", pd.Series([None])).iloc[0]
         if pd.notna(dr):
             delta_color = "inverse" if dr > 0 else "normal"
-            cA.metric("Decline rate (5yr)", f"{dr:+.2f}%/yr", delta_color=delta_color)
+            cA.metric(
+                "Decline rate (5yr)",
+                f"{dr:+.2f}%/yr",
+                delta_color=delta_color,
+                help=(
+                    "Annualized production change over the trailing 5 years: "
+                    "(Prod_N − Prod_N-5) / Prod_N-5 / 5. "
+                    "Negative = declining basin; positive = still growing. "
+                    "Critical signal for mature-basin investment decisions."
+                ),
+            )
         if pd.notna(rpi):
-            cB.metric("Relative performance", f"{rpi:.0f}/100")
+            cB.metric(
+                "Relative performance",
+                f"{rpi:.0f}/100",
+                help=(
+                    "Percentile rank of this region's composite score "
+                    "(growth × 0.4 + revenue × 0.4 − volatility × 0.2) "
+                    "among all regions, scaled 0–100. "
+                    "87 means this region outperforms 87% of peers."
+                ),
+            )
 
     with st.expander("📖 Forecasting methodology"):
         st.markdown(
@@ -737,80 +870,31 @@ def tab_workspace(actuals, forecasts, annual_silver, ctrl):
                 f"{prod:,.0f} {unit}",
             )
             if growth is not None and pd.notna(growth):
-                k2.metric("YoY growth", f"{growth:+.1f}%")
-            k3.metric("Forecast R²", f"{ff_focus['r_squared'].iloc[0]:.2f}")
+                k2.metric(
+                    "YoY growth",
+                    f"{growth:+.1f}%",
+                    help="(Production_N − Production_N-1) / Production_N-1 × 100. Positive = growing, negative = declining.",
+                )
+            k3.metric(
+                "Forecast R²",
+                f"{ff_focus['r_squared'].iloc[0]:.2f}",
+                help="OLS linear fit quality (0–1). ≥0.85 = reliable trend; <0.5 = noisy/non-linear.",
+            )
             k4.metric(
                 "Investment score",
                 f"{ff_focus['investment_score'].iloc[0]:.0f}/100",
+                help="Composite: growth × 0.35 + (1−decline) × 0.25 + (1−volatility) × 0.20 + R² × 0.20.",
             )
-            # Status badge
+            # Status badge + hint to Compare tab for full chart
             label, emoji = classify_region(
                 effective_focus, ctrl["fuel"], ctrl["year"], actuals, forecasts
             )
             st.caption(
-                f"{emoji} **{label}** · Click another region on the map to "
-                f"switch focus, or use the **Clear focus** button above."
+                f"{emoji} **{label}** · "
+                f"Forecast R²: {ff_focus['r_squared'].iloc[0]:.2f} · "
+                f"Investment score: {ff_focus['investment_score'].iloc[0]:.0f}/100 · "
+                f"Use the **🆚 Compare regions** expander below for full trend charts."
             )
-            st.divider()
-
-            # Forecast timeseries chart for the focused region — replaces the
-            # need for a separate Regional Detail tab
-            from src.ui.charts import actuals_forecast_chart
-            baked = forecasts[forecasts["fuel_type"] == ctrl["fuel"]]
-            baked_row = baked[baked["region_id"] == effective_focus]
-            baked_cutoff = (
-                int(baked_row["trained_through_year"].iloc[0])
-                if not baked_row.empty else None
-            )
-            # If slider is BEFORE the baked cutoff, re-fit live so the user
-            # sees "what would the model have predicted from that year's view"
-            if baked_cutoff is not None and ctrl["year"] < baked_cutoff:
-                fc = _live_fit(annual_silver, effective_focus, ctrl["fuel"], ctrl["year"])
-                if fc is not None:
-                    live_forecasts = pd.DataFrame([{
-                        "region_id": effective_focus,
-                        "region_name": baked_row["region_name"].iloc[0],
-                        "fuel_type": ctrl["fuel"],
-                        "slope": fc.slope,
-                        "intercept": fc.intercept,
-                        "r_squared": fc.r_squared,
-                        "trained_through_year": ctrl["year"],
-                        "horizon_end": ctrl["horizon_end"],
-                        "method": "linear_ols",
-                        "investment_score": None,
-                        "source": f"live-refit through {ctrl['year']}",
-                    }])
-                    forecasts_for_chart = live_forecasts
-                else:
-                    forecasts_for_chart = baked
-            else:
-                forecasts_for_chart = baked
-
-            with st.container(border=True):
-                st.markdown(f"**📈 Production Forecast — {ff_focus['region_name'].iloc[0]}**")
-                fig_ts = actuals_forecast_chart(
-                    actuals, forecasts_for_chart,
-                    region_id=effective_focus,
-                    fuel_type=ctrl["fuel"],
-                    selected_year=ctrl["year"],
-                    horizon_end=ctrl["horizon_end"],
-                )
-                st.plotly_chart(fig_ts, use_container_width=True)
-
-            with st.expander("📖 Forecasting methodology"):
-                st.markdown(
-                    """
-                    **Linear Regression (Ordinary Least Squares)** via scikit-learn.
-
-                    - Fits a straight line to `(year, production)` pairs using all data ≤ selected year.
-                    - Projection: `production = slope × year + intercept`.
-                    - **R²** reports fit quality on historical data (0–1).
-                    - Dashed band in the chart widens ±5% per year to signal uncertainty.
-
-                    _"A well-reasoned linear trend beats an unexplained black box."_ — problem statement, §3.
-                    """
-                )
-
             st.divider()
 
     # Explicit values table — quickest way to verify numerical changes across
@@ -1161,6 +1245,11 @@ def main() -> None:
 
     ctrl = render_sidebar(actuals, forecasts)
 
+    # Overlay any user-uploaded Excel data onto the Gold-layer actuals
+    uploaded_actuals = st.session_state.get("uploaded_actuals")
+    if uploaded_actuals is not None and not uploaded_actuals.empty:
+        actuals = merge_uploaded_actuals(actuals, uploaded_actuals)
+
     # If the map has a focus active on the same fuel, narrow every tab to
     # that one region. The Map tab's "Clear focus" button removes the state.
     focus_id = st.session_state.get("map_focus_region")
@@ -1168,30 +1257,43 @@ def main() -> None:
     if focus_id and focus_fuel == ctrl["fuel"] and focus_id in ctrl["regions"]:
         ctrl["regions"] = [focus_id]
 
-    # ---------------------------------------- SINGLE-PAGE GRID LAYOUT
-    # 1. Top KPI strip
-    with st.container(border=True):
-        st.markdown("### 📌 Summary")
-        render_kpi_strip(actuals, forecasts, ctrl)
+    # ---------------------------------------- THREE-TAB LAYOUT
+    tab_dashboard, tab_well, tab_ai = st.tabs([
+        "📊 Dashboard",
+        "🛢️ Well Economics",
+        "🤖 AI Analyst",
+    ])
 
-    # 2. Map workspace — full width
-    with st.container(border=True):
-        tab_workspace(actuals, forecasts, annual_silver, ctrl)
-
-    # 3. Bottom: Sensitivity (crude) — full width
-    if ctrl["fuel"] == "crude_oil":
+    # ---- Tab 1: Dashboard -----------------------------------------------
+    with tab_dashboard:
+        # 1. Top KPI strip
         with st.container(border=True):
-            tab_sensitivity(actuals, forecasts, ctrl)
+            st.markdown("### 📌 Summary")
+            render_kpi_strip(actuals, forecasts, ctrl)
 
-    # 4. Compare — expander so it doesn't clutter default view
-    with st.expander("🆚 Compare regions", expanded=False):
-        tab_compare(actuals, forecasts, ctrl)
+        # 2. Map workspace — full width
+        with st.container(border=True):
+            tab_workspace(actuals, forecasts, annual_silver, ctrl)
 
-    # 5. AI Analyst — Phase 3 conversational interface
-    with st.container(border=True):
+        # 3. Sensitivity (crude only) — full width
+        if ctrl["fuel"] == "crude_oil":
+            with st.container(border=True):
+                tab_sensitivity(actuals, forecasts, ctrl)
+
+        # 4. Compare — expander so it doesn't clutter default view
+        with st.expander("🆚 Compare regions", expanded=False):
+            tab_compare(actuals, forecasts, ctrl)
+
+    # ---- Tab 2: Well Economics ------------------------------------------
+    with tab_well:
+        from src.ui.well_calculator import render_well_calculator
+        render_well_calculator(actuals, forecasts, ctrl)
+
+    # ---- Tab 3: AI Analyst ----------------------------------------------
+    with tab_ai:
         tab_ai_analyst(actuals, forecasts, ctrl, meta)
 
-    # 6. Data sources / provenance footer
+    # Data sources / provenance footer — always visible regardless of active tab
     render_data_sources_panel(meta)
 
 
