@@ -1,0 +1,13 @@
+[theme]
+base = "dark"
+# Accent — used on focus borders, active toggles, slider
+primaryColor = "#FF5722"
+# Page background
+backgroundColor = "#0E1117"
+# Sidebar + container panel background
+secondaryBackgroundColor = "#1A1F28"
+textColor = "#FAFAFA"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false

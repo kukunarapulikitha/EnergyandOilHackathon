@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Environment variables — never commit your keys
+.env
+.env.local
+.env.*.local
+
+# Build outputs
+dist/
+build/
+out/
+.next/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Cached EIA data (re-fetchable; avoid bloating repo)
+data/bronze/
+data/silver/
+data/gold/
+data/*.csv
+data/*.parquet
+data/*.json
+data/*.log
+!data/.gitkeep
+# Reference data is STATIC and committed — exclude from the gitignore above
+!data/reference/
+!data/reference/*.json
+!data/reference/*.geojson

@@ -1,0 +1,23 @@
+{
+  "as_of": "2025-01-10",
+  "source": "Baker Hughes North America Rig Count (weekly). Snapshot — not live.",
+  "attribution": "https://bakerhughesrigcount.gcs-web.com/",
+  "total_us": 589,
+  "by_state": {
+    "TX": {"rigs": 278, "lat": 31.1, "lon": -100.1, "name": "Texas"},
+    "NM": {"rigs": 108, "lat": 34.3, "lon": -106.1, "name": "New Mexico"},
+    "LA": {"rigs": 42,  "lat": 31.2, "lon": -92.3,  "name": "Louisiana"},
+    "OK": {"rigs": 38,  "lat": 35.5, "lon": -97.5,  "name": "Oklahoma"},
+    "ND": {"rigs": 33,  "lat": 47.5, "lon": -100.5, "name": "North Dakota"},
+    "PA": {"rigs": 15,  "lat": 40.9, "lon": -77.7,  "name": "Pennsylvania"},
+    "WY": {"rigs": 14,  "lat": 43.0, "lon": -107.5, "name": "Wyoming"},
+    "CO": {"rigs": 12,  "lat": 39.0, "lon": -105.5, "name": "Colorado"},
+    "OH": {"rigs": 10,  "lat": 40.3, "lon": -82.8,  "name": "Ohio"},
+    "WV": {"rigs": 11,  "lat": 38.5, "lon": -80.9,  "name": "West Virginia"},
+    "UT": {"rigs": 10,  "lat": 39.3, "lon": -111.6, "name": "Utah"},
+    "CA": {"rigs": 7,   "lat": 36.7, "lon": -119.6, "name": "California"},
+    "AK": {"rigs": 7,   "lat": 64.2, "lon": -149.5, "name": "Alaska"},
+    "KS": {"rigs": 3,   "lat": 38.5, "lon": -98.4,  "name": "Kansas"},
+    "MT": {"rigs": 1,   "lat": 46.9, "lon": -110.5, "name": "Montana"}
+  }
+}
