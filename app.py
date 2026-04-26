@@ -1222,23 +1222,20 @@ def _ai_query(
     )
 
     try:
-        client = GroqClient()
+        with st.spinner("Analyzing live data…"):
+            resp = GroqClient().chat(messages)
+        if resp.error:
+            raw = f"(AI Analysis) {resp.error}. Please retry or check your API keys."
+        else:
+            raw = resp.text or "(AI Analysis) Empty response from model."
     except GroqUnavailable as exc:
-        return {
-            "role": "assistant",
-            "raw": f"(AI Analysis) AI is unavailable — {exc}",
-            "context": context,
-            "artifact": artifact,
-            "intent": intent,
-        }
-
-    with st.spinner("Analyzing live data with Llama 3.3 70B..."):
-        resp = client.chat(messages)
-
-    if resp.error:
-        raw = f"(AI Analysis) {resp.error}. Please retry or check your GROQ_API_KEY."
-    else:
-        raw = resp.text or "(AI Analysis) Empty response from model."
+        raw = (
+            f"(AI Analysis) AI is currently unavailable — {exc} "
+            "Set at least one of GROQ_API_KEY, XAI_API_KEY, or GEMINI_API_KEY "
+            "in your Streamlit Cloud secrets (Settings → Secrets)."
+        )
+    except Exception as exc:
+        raw = f"(AI Analysis) Unexpected error: {exc}. Please retry."
 
     return {
         "role": "assistant",
