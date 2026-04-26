@@ -1088,11 +1088,6 @@ def tab_workspace(actuals, forecasts, annual_silver, ctrl):
 
 def tab_sensitivity(actuals, forecasts, ctrl):
     st.subheader("🎛️ Sensitivity Analysis")
-    st.caption(
-        "Stress-test the Projected Production Estimate under different WTI "
-        "price and decline-rate assumptions. Tied to the year selector in the "
-        "sidebar — drag it to explore sensitivity across the forecast horizon."
-    )
 
     if ctrl["fuel"] != "crude_oil":
         st.info(
@@ -1101,134 +1096,132 @@ def tab_sensitivity(actuals, forecasts, ctrl):
         )
         return
 
-    if not ctrl["regions"]:
-        st.info("Select a region in the sidebar.")
+    fuel_forecasts = forecasts[forecasts["fuel_type"] == ctrl["fuel"]]
+    if fuel_forecasts.empty:
+        st.warning("No forecasts available for this fuel.")
         return
 
-    ff = forecasts[
-        (forecasts["fuel_type"] == ctrl["fuel"])
-        & (forecasts["region_id"].isin(ctrl["regions"]))
-    ]
+    ff = fuel_forecasts[
+        fuel_forecasts["region_id"].isin(ctrl["regions"])
+    ] if ctrl["regions"] else fuel_forecasts
+
+    # If sidebar region filters exclude everything, fall back to all regions
+    # so sensitivity remains interactive via map focus or local selector.
     if ff.empty:
-        st.warning("No forecasts available for the selected region.")
-        return
+        ff = fuel_forecasts
 
-    fa = actuals[actuals["fuel_type"] == ctrl["fuel"]]
+    region_lookup = (
+        actuals[actuals["fuel_type"] == ctrl["fuel"]][["region_id", "region_name"]]
+        .drop_duplicates()
+        .set_index("region_id")["region_name"]
+        .to_dict()
+    )
 
-    # Pre-select map-clicked region if it's in the current fuel + region list
     region_options = ff["region_id"].tolist()
     pinned = st.session_state.get("map_focus_region")
     pinned_fuel = st.session_state.get("map_focus_fuel")
     default_idx = 0
     if pinned and pinned_fuel == ctrl["fuel"] and pinned in region_options:
         default_idx = region_options.index(pinned)
-        st.caption(f"📍 Pre-selected from map click ({pinned}). Change via dropdown if needed.")
+    elif ctrl["regions"]:
+        first_selected = ctrl["regions"][0]
+        if first_selected in region_options:
+            default_idx = region_options.index(first_selected)
 
     region_id = st.selectbox(
         "Region",
         options=region_options,
         index=default_idx,
-        format_func=lambda rid: (
-            fa[fa["region_id"] == rid]["region_name"].iloc[0]
-            if rid in fa["region_id"].values else rid
-        ),
+        format_func=lambda rid: region_lookup.get(rid, rid),
         key="sensitivity_region",
     )
 
     row = ff[ff["region_id"] == region_id].iloc[0]
-    region_label = (
-        fa[fa["region_id"] == region_id]["region_name"].iloc[0]
-        if region_id in fa["region_id"].values else region_id
-    )
+    region_label = region_lookup.get(region_id, region_id)
 
-    # Build 2D revenue shock matrix (price shocks × production shocks)
     from src.kpi.thesis import build_revenue_sensitivity_matrix, DEFAULT_WTI
+
     matrix_df, baseline_usd = build_revenue_sensitivity_matrix(
         row, target_year=ctrl["year"], wti_price=DEFAULT_WTI,
     )
-
     base_production = max(
         float(row["slope"]) * ctrl["year"] + float(row["intercept"]), 0.0
     )
 
+    def _fmt_billions(v: float) -> str:
+        raw = f"{v/1e9:.1f}"
+        return f"${raw[:-2]}B" if raw.endswith(".0") else f"${raw}B"
+
+    def _interpolate_hex(start_hex: str, end_hex: str, weight: float) -> str:
+        weight = max(0.0, min(1.0, weight))
+        s = tuple(int(start_hex[i:i + 2], 16) for i in (1, 3, 5))
+        e = tuple(int(end_hex[i:i + 2], 16) for i in (1, 3, 5))
+        rgb = tuple(round(s[idx] + (e[idx] - s[idx]) * weight) for idx in range(3))
+        return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
+
+    min_v = float(matrix_df.values.min())
+    max_v = float(matrix_df.values.max())
+    rng = max(max_v - min_v, 1.0)
+    baseline_key = "+0%"
+
     st.markdown(
-        f"**Revenue sensitivity · {region_label} · {ctrl['year']}**"
+        f"""
+        <div style="
+            border:1px solid #d6dce8;
+            border-radius:16px;
+            background:#f4f6fa;
+            padding:24px 24px 18px 24px;
+            margin-top:4px;
+        ">
+            <div style="font-size:22px;font-weight:700;color:#172036;margin-bottom:4px;">
+                Revenue sensitivity · {region_label} oil · {ctrl['year']}
+            </div>
+            <div style="font-size:18px;color:#5f708a;line-height:1.45;margin-bottom:16px;">
+                Annualized revenue at shocks to WTI price (rows) and oil production (columns). Baseline =
+                <b>{_fmt_billions(baseline_usd)}</b>/yr at {DEFAULT_WTI:.2f} usd/bbl × {base_production:,.0f} bbl/d.
+            </div>
+        """,
+        unsafe_allow_html=True,
     )
-    st.caption(
-        f"Annualized revenue at shocks to WTI price (rows) and oil production (columns). "
-        f"Baseline = **${baseline_usd/1e9:,.1f}B**/yr at **${DEFAULT_WTI:.2f}/bbl** "
-        f"× **{base_production:,.0f} Mb/d**."
-    )
 
-    # Format every cell as $X.YB / $XXM
-    def _fmt_cell(v: float) -> str:
-        return f"${v/1e9:.1f}B" if v >= 1e9 else f"${v/1e6:.0f}M"
-
-    # Render heatmap with Plotly so this tab does not depend on matplotlib.
-    import plotly.graph_objects as go
-
-    heatmap_text = matrix_df.apply(lambda col: col.map(_fmt_cell)).values
-    z_values = matrix_df.astype(float).values
-    zmin = float(z_values.min())
-    zmax = float(z_values.max())
-    zmid = float(matrix_df.loc["+0%", "+0%"]) if "+0%" in matrix_df.index and "+0%" in matrix_df.columns else float(z_values.mean())
-    flat_surface = abs(zmax - zmin) < 1e-9
-
-    if flat_surface:
-        st.warning(
-            "All scenarios resolve to the same revenue value for this selection, "
-            "so the heat map cannot show a gradient. Try a different year or region."
+    table_html = [
+        '<table style="width:100%;border-collapse:collapse;table-layout:fixed;background:#ffffff;">',
+        '<thead><tr>',
+        '<th style="text-align:right;padding:8px 10px;color:#5f708a;font-size:14px;border-bottom:2px solid #d6dce8;">↓ price / production →</th>'
+    ]
+    for col in matrix_df.columns:
+        table_html.append(
+            f'<th style="text-align:center;padding:8px 10px;color:#5f708a;font-size:14px;border-bottom:2px solid #d6dce8;">{col}</th>'
         )
+    table_html.append('</tr></thead><tbody>')
 
-    heatmap_fig = go.Figure(
-        data=go.Heatmap(
-            z=z_values,
-            x=[str(c) for c in matrix_df.columns],
-            y=[str(i) for i in matrix_df.index],
-            colorscale="RdYlGn",
-            zmin=zmin,
-            zmax=(zmax if not flat_surface else zmax + 1.0),
-            zmid=zmid,
-            text=heatmap_text,
-            texttemplate="%{text}",
-            hovertemplate=(
-                "Price shock: %{y}<br>"
-                "Production shock: %{x}<br>"
-                "Revenue: %{text}<extra></extra>"
-            ),
-            colorbar=dict(title=dict(text="Revenue", side="right")),
-            showscale=True,
+    for ridx in matrix_df.index:
+        table_html.append('<tr>')
+        table_html.append(
+            f'<th style="text-align:right;padding:10px;color:#5f708a;font-size:16px;font-weight:600;border-right:1px solid #d6dce8;">{ridx}</th>'
         )
-    )
-    heatmap_fig.update_layout(
-        margin=dict(l=20, r=20, t=10, b=10),
-        xaxis_title="Production shock",
-        yaxis_title="WTI price shock",
-    )
-    st.plotly_chart(
-        heatmap_fig,
-        use_container_width=True,
-        key="revenue_sensitivity_heatmap",
-        config={"displayModeBar": False},
-    )
-    st.caption(
-        f"Cells scale linearly between worst corner (${matrix_df.values.min()/1e9:,.1f}B) "
-        f"and best corner (${matrix_df.values.max()/1e9:,.1f}B). "
-        f"Center cell (0% / 0%) is the baseline. "
-        f"Revenue is linear in both axes: `base × (1 + price_shock) × (1 + production_shock)`."
-    )
+        for cidx in matrix_df.columns:
+            val = float(matrix_df.loc[ridx, cidx])
+            weight = (val - min_v) / rng
+            bg = _interpolate_hex("#f2dcdd", "#d9efe4", weight)
+            outline = "border:2px solid #1a2033;" if (ridx == baseline_key and cidx == baseline_key) else "border:1px solid transparent;"
+            table_html.append(
+                f'<td style="text-align:center;padding:10px 8px;font-size:17px;color:#1a2033;background:{bg};{outline}">{_fmt_billions(val)}</td>'
+            )
+        table_html.append('</tr>')
 
-    with st.expander("📖 How to read this"):
-        st.markdown(
-            """
-            **Rows (↓ Price):** % shock applied to WTI spot price. -40% means WTI drops to about $47.
-            **Columns (→ Production):** % shock applied to projected production at the selected year.
-            **Cell value:** annualized revenue in USD under that combined scenario.
-
-            **Use it to answer:** "What happens to my revenue if WTI drops 20% and production
-            comes in 10% below my forecast?" → look at row -20%, column -10%.
-            """
-        )
+    table_html.append('</tbody></table>')
+    st.markdown("".join(table_html), unsafe_allow_html=True)
+    st.markdown(
+        f"""
+            <div style="font-size:17px;color:#5f708a;line-height:1.35;margin-top:14px;">
+                Cells scale linearly between <b>{_fmt_billions(min_v)}</b> (worst corner) and <b>{_fmt_billions(max_v)}</b> (best).
+                Baseline is outlined.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 # ------------------------------------------------------------------ AI ANALYST
