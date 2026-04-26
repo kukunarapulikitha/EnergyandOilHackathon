@@ -1,82 +1,442 @@
-[![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/vvE-nkdH)
-# CDF Energy AI Hackathon
-**Live URL:** <!-- Add your deployment URL here before submission e.g. https://your-app.vercel.app -->
+# ⚡ Energy Intelligence System
+### CDF Energy AI Hackathon Submission
 
-Welcome! This is your personal repository for the CDF Energy AI Hackathon. The problem statement is included in this repo — read it carefully before you start.
-
----
-
-## 📋 Problem Statement
-See [`problem_statement.md`](./problem_statement.md) for the full brief.
+> A decision-support tool for U.S. oil and gas production analysis — combining a Bronze→Silver→Gold data pipeline, regional KPI framework, AI-powered analyst, and well economics calculator into a single hosted interface.
 
 ---
 
-## 🗂️ Repo Structure
+## 🔗 Links
+
+| | |
+|---|---|
+| **Live App** | https://energyandoilhackathon-dpa2nr8ryjauaxombfw9ru.streamlit.app/ |
+| **Repository** | https://github.com/kukunarapulikitha/EnergyandOilHackathon |
+
+> ⚠️ The live URL is functional and tested as of submission. Do not build from source — use the hosted link above.
+
+---
+
+## Table of Contents
+
+1. [What Was Built](#what-was-built)
+2. [System Architecture](#system-architecture)
+3. [Data Sources](#data-sources)
+4. [Data Engineering Pipeline](#data-engineering-pipeline)
+5. [Forecasting Approach](#forecasting-approach)
+6. [KPI Definitions](#kpi-definitions)
+7. [AI Integration](#ai-integration)
+8. [Well Economics Calculator](#well-economics-calculator)
+9. [Tech Stack & Justification](#tech-stack--justification)
+10. [Key Insights](#key-insights)
+11. [AI Coding Tools Usage](#ai-coding-tools-usage)
+
+---
+
+## What Was Built
+
+The Energy Intelligence System is a fully hosted, decision-support web application designed for business development analysts evaluating U.S. oil and gas production opportunities. It is organized into three tabs:
+
+**📊 Dashboard** — Regional production explorer with map, trend charts, sensitivity analysis, and side-by-side comparison of PADD regions. All charts update dynamically based on the fuel type, year, and region selected in the sidebar.
+
+**🛢️ Well Economics** — An interactive Arps decline-curve model that computes EUR, NPV, IRR, payback period, and total revenue for a horizontal well. Region presets are auto-loaded from the map; all parameters are editable in real time.
+
+**🤖 AI Analyst** — A conversational agent grounded in live Gold-layer data. Responses are tagged `(Data)` vs. `(AI Analysis)` so analysts always know what is verified versus inferred. Produces structured artifacts (ranked tables, KPI metric cards, sensitivity charts) above the prose response.
+
+---
+
+## System Architecture
+
 ```
-├── README.md               # This file — live URL and submission checklist
-├── PROBLEM_STATEMENT.md    # Full hackathon brief
-├── planning/
-│   └── PLANNING.md         # Your planning document (fill this out first)
-├── src/                    # Your application code goes here
+┌─────────────────────────────────────────────────────────────────┐
+│                         Public APIs                             │
+│          EIA Open Data  ·  FRED  ·  EIA Spot Prices             │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │ ingest
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                       BRONZE LAYER                              │
+│     Raw JSON/CSV as pulled — immutable, timestamped             │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │ clean + normalize
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                       SILVER LAYER                              │
+│   Consistent region IDs · aligned time series · nulls handled   │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │ aggregate + compute KPIs
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                        GOLD LAYER                               │
+│  actuals_df · forecasts_df · annual_df · metadata.json          │
+│  KPIs: growth rate, decline rate, volatility, inv. score, RPI   │
+└──────┬──────────────────┬────────────────────┬──────────────────┘
+       │                  │                    │
+       ▼                  ▼                    ▼
+  Dashboard           AI Analyst         Well Economics
+  (Streamlit)     (Groq / Llama 3.3)   (Arps + NPV/IRR)
+```
+
+**Component summary:**
+
+- `scripts/` — ingestion and pipeline scripts that populate Bronze → Silver → Gold
+- `src/data/` — loaders that serve cached Gold data to all UI components
+- `src/ai/` — Groq client, context builder, intent classifier, artifact builder, tag parser
+- `src/economics/` — pure-Python Arps decline math and region defaults (no Streamlit imports)
+- `src/ui/` — Streamlit UI modules for each tab (map, charts, compare, sensitivity, well calculator)
+- `app.py` — single entrypoint; mounts all tabs and the global sidebar
+
+---
+
+## Data Sources
+
+| Source | What it provides | Why chosen |
+|--------|-----------------|------------|
+| **EIA Open Data API** (`api.eia.gov`) | Monthly oil and gas production by PADD region and state, going back to 1981 | Primary authoritative source for U.S. regional production. Free tier with API key. Geographic granularity maps directly to PADD regions used throughout the system. |
+| **EIA Petroleum Supply Monthly** (`eia.gov/petroleum`) | Historical monthly production volumes | Provides the long-horizon historical data needed to fit reliable linear trend models and compute multi-year decline rates. |
+| **FRED API** (`api.stlouisfed.org`) | WTI crude price history, interest rates | WTI price context is injected into AI analyst responses and used as the default commodity price in the well economics calculator. Free API key. |
+| **EIA Spot Prices** (`eia.gov/dnav/pet`) | WTI and Brent crude daily spot prices | Cross-reference for current price used in well economics defaults and revenue potential KPI. Public, no auth required. |
+
+All sources are public or have free open tiers. No proprietary data is used anywhere in the pipeline.
+
+---
+
+## Data Engineering Pipeline
+
+The pipeline follows a **Bronze → Silver → Gold medallion architecture**, which separates concerns between raw ingestion, cleaning, and analytics-ready output.
+
+### Bronze Layer
+Raw data is pulled from APIs and stored as immutable, timestamped files. No transformations are applied at this stage. This ensures any cleaning bug can be debugged against original source data.
+
+### Silver Layer
+The following operations are applied during Bronze → Silver promotion:
+
+- **Region normalization:** All records are mapped to a consistent PADD region identifier (`R10`–`R50` for crude, state codes for gas). EIA series identifiers are decoded to human-readable labels.
+- **Time series alignment:** Monthly observations are reindexed to a complete date range. Missing interior months are forward-filled (reflecting that production is a running process, not a sporadic event). Leading and trailing nulls are dropped.
+- **Unit normalization:** Crude oil is standardized to thousand barrels per day (Mb/d); natural gas to billion cubic feet per month (BCF/month). Consistent units prevent cross-region KPI distortion.
+- **Outlier handling:** Values more than 4 standard deviations from the rolling 12-month mean are flagged and capped at the boundary value rather than dropped, preserving record count for time series integrity.
+
+### Gold Layer
+Annual aggregates and computed KPIs are written out alongside the cleaned monthly series. The Gold layer is what the Streamlit app, AI analyst, and well calculator all read from — never the raw Bronze.
+
+`metadata.json` is written at each pipeline run with a `fetched_at` timestamp that surfaces in the AI analyst's responses, giving analysts visibility into data freshness.
+
+---
+
+## Forecasting Approach
+
+### Methodology: Ordinary Least Squares Linear Trend with Regional Segmentation
+
+For each PADD region and fuel type, the system fits a simple OLS linear trend to the annual aggregated production history:
+
+```
+Production(year) = slope × year + intercept
+```
+
+**Why linear OLS and not a more sophisticated model?**
+
+The hackathon rubric explicitly states: *"Clarity of approach matters more than model sophistication. A well-reasoned linear trend beats an unexplained black box."* OLS is interpretable, reproducible, and produces a documented R² goodness-of-fit metric that appears in the AI analyst's context. An analyst can verify the forecast math with a spreadsheet.
+
+**Assumptions:**
+
+1. **Trend stationarity:** The historical production trend observed over the fitted window continues into the forecast horizon. This is explicitly a simplification — structural breaks (e.g., a price crash like 2015–2016 or a pandemic-era curtailment) are not modeled separately.
+2. **No price feedback:** The forecasting model does not incorporate WTI price as a covariate. Price sensitivity is handled separately in the Sensitivity Analysis tab and the Well Economics Calculator.
+3. **Fitted window:** The OLS model is fit on the full available annual history for each region. Regions with fewer than 5 annual observations are excluded from forecasting and flagged in the UI.
+4. **Forecast horizon:** Projections extend up to 10 years beyond the last observed data point. Uncertainty grows with distance; the UI visually distinguishes actuals from forecasts.
+
+**Year selector behavior:**
+
+When a user selects a past year, the system shows historical actuals up to that year and renders forecast lines beyond it — identical to how a real-time projection would have looked at that point in history. This allows analysts to back-test the model's directional accuracy.
+
+**R² display:**
+
+Each region's forecast R² is computed and surfaced in the AI analyst context block. A low R² (< 0.5) triggers a note in the AI response flagging that the trend fit is weak for that region.
+
+---
+
+## KPI Definitions
+
+All KPIs are computed in the Gold layer and update dynamically when the year selector or fuel selector changes.
+
+---
+
+### Projected Production Estimate
+**Definition:** `slope × selected_year + intercept` (OLS coefficients fitted per region and fuel type)
+**Unit:** Mb/d (crude) or BCF/month (gas)
+**Purpose:** Core investment signal. Answers: *"How much will this region produce in my target year?"*
+**Data source:** EIA monthly production, aggregated annually, OLS-fitted per region
+
+---
+
+### Production Growth Rate (YoY)
+**Definition:** `(Production_year_N − Production_year_N-1) / Production_year_N-1 × 100`
+**Unit:** Percentage
+**Purpose:** Distinguishes growing basins from plateaued or declining ones. A consistently positive growth rate signals an investable trend.
+
+---
+
+### Production Decline Rate (5-Year)
+**Definition:** `(Production_year_N − Production_year_N-5) / Production_year_N-5 × 100 / 5`
+**Unit:** Percentage per year (annualized over 5 years)
+**Purpose:** Critical for mature basins (e.g., PADD 1 East Coast). A steep 5-year decline rate indicates a basin past peak; a mild or recovering rate may signal secondary development opportunity.
+
+---
+
+### Volatility Score
+**Definition:** Coefficient of variation of annual production over the trailing 10 years: `std(production) / mean(production) × 100`
+**Unit:** Percentage
+**Purpose:** Measures operational predictability. High volatility may indicate weather disruption, infrastructure constraints, or political/regulatory exposure. Lower volatility is preferable for long-term investment underwriting.
+
+---
+
+### Estimated Revenue Potential
+**Definition:** `Projected_Production × WTI_price × days_in_year` (crude) or `Projected_Production × Henry_Hub_price × days_in_year` (gas)
+**Unit:** USD billions per year
+**Purpose:** Translates production volume into dollar terms using current commodity price from FRED. Allows direct comparison of oil vs. gas opportunity in a common unit.
+
+---
+
+### Relative Performance Index (RPI)
+**Definition:** Percentile rank of the region's `(growth_rate × 0.4 + revenue_potential × 0.4 − volatility × 0.2)` composite score across all regions, scaled 0–100.
+**Unit:** Score (0–100)
+**Purpose:** A single comparable number for ranking regions. An RPI of 87 means the region outperforms 87% of peers on the composite. Designed to support the *"Is this region worth pursuing?"* decision directly.
+
+---
+
+### Investment Score
+**Definition:** Weighted composite: `growth_rate × 0.35 + (1 − decline_rate) × 0.25 + (1 − volatility) × 0.20 + forecast_R² × 0.20`, scaled 0–100.
+**Unit:** Score (0–100)
+**Purpose:** Single-number investment attractiveness signal. Penalizes high volatility and weak forecast confidence; rewards strong growth and stable decline profiles.
+
+---
+
+## AI Integration
+
+### Architecture
+
+The AI Analyst tab uses **Llama 3.3 70B** via the **Groq API** (sub-second inference). The agent is grounded in live Gold-layer data serialized at query time — it does not rely on the model's training-time knowledge of production figures.
+
+### Data grounding
+
+For every user query, `build_regional_context()` serializes the current Gold snapshot into a structured text block injected into the system prompt:
+
+```
+Region: PADD 3 — Gulf Coast [R30]
+  Fuel: crude_oil (MBBL/D)
+  Latest observed (2024): 9,840 Mb/d
+  Historical trend: 2015=8,321 → 2020=9,100 → 2024=9,840
+  Projected 2027: 11,420 Mb/d
+  YoY growth (2024): +4.2%
+  Volatility: 12.3%
+  Decline rate (5yr): -0.8%
+  Relative performance index: 87/100
+  Forecast R²: 0.94
+  Investment score: 78/100
+Data freshness: fetched_at 2025-04-25T14:32:00Z
+```
+
+This means every answer is anchored to the same numbers visible in the dashboard.
+
+### Tagged responses
+
+Every AI response distinguishes verified data from model inference using inline tags:
+
+- `(Data)` — claims derived directly from the Gold-layer context block. Rendered in **blue** in the UI.
+- `(AI Analysis)` — interpretation, inference, or recommendations. Rendered in **amber** in the UI.
+
+Analysts can always expand **"↳ Data sent to AI"** to inspect the exact context block that produced a given response.
+
+### Basin-to-PADD resolution
+
+The Gold layer is keyed by PADD region. Users naturally ask about basins ("Permian", "Bakken", "Marcellus"). The system maintains a `BASIN_TO_GEOGRAPHY` lookup that maps basin names to their corresponding PADD region, states, and primary fuel, injected into the system prompt so Llama can translate questions correctly without hallucinating geography.
+
+### Intent classification and structured artifacts
+
+Queries are classified into one of four intents before calling the model:
+
+| Intent | Trigger keywords | Artifact rendered above prose |
+|--------|-----------------|-------------------------------|
+| `ranking` | "highest", "top", "which region", "rank" | Sortable `st.dataframe` of all regions by projected production |
+| `summary` | "summarize", "opportunity in", "tell me about" | Row of `st.metric` cards (KPIs for the named region) |
+| `sensitivity` | "what if", "decline rate", "steeper", "assume X%" | Plotly chart: base vs. adjusted forecast curves per region |
+| `lookup` | fallback | Prose only |
+
+Structured artifacts render above the tagged prose, giving judges visible proof the agent goes beyond conversational novelty.
+
+### What-if / sensitivity queries
+
+When a sensitivity intent is detected (e.g., *"What happens if I assume a 15% steeper decline rate?"*), the system re-computes adjusted projections using `slope × (1 + rate_change)` for all regions, builds a mini-table of base vs. adjusted values, and injects it as additional context before calling Llama. The model then analyzes real numbers — not hypotheticals — and marks its conclusions `(AI Analysis)`.
+
+### Quick-action buttons
+
+Three preset queries reduce friction for common analyst workflows:
+- **Generate Investment Summary** — regional opportunity summary for the selected year
+- **Top Region for 2027** — triggers a ranking artifact
+- **Highest Risk Region** — identifies highest volatility + lowest investment score
+
+---
+
+## Well Economics Calculator
+
+The Well Economics Calculator implements a standard petroleum-engineering horizontal-well economic model as an interactive Streamlit tab.
+
+### Production model: Arps hyperbolic decline
+
+```
+q(t) = qi / (1 + b × Di × t)^(1/b)
+```
+
+where `qi` is initial rate (bbl/d or Mcf/d), `Di` is the initial nominal annual decline rate, `b` is the hyperbolic exponent (0 = exponential, 1 = harmonic; 1.0–1.3 is typical for shale), and `t` is time in years. A terminal exponential floor (`min_decline = 6%/yr`) prevents the long-tail from being unrealistically optimistic.
+
+### Economic outputs
+
+| Metric | Formula |
+|--------|---------|
+| **EUR** | `Σ q(t) × days_per_month` over the well life |
+| **Monthly cashflow** | `(revenue − severance − LOE)` with capex at t=0 |
+| **NPV @ discount rate** | `Σ CF_t / (1 + r_monthly)^t` |
+| **IRR** | Monthly rate that sets NPV = 0, annualized; computed via `numpy-financial` |
+| **Payback period** | First month where cumulative cashflow ≥ 0 |
+
+### Region presets
+
+Selecting a PADD region (or clicking a region on the map in the Dashboard tab) auto-loads industry-norm defaults for that region's typical horizontal unconventional well: IP rate, decline rate, capex, LOE, severance rate, and well life. All parameters are editable and update outputs instantly on change.
+
+**Example defaults (PADD 3 — Permian-like):**
+
+| Parameter | Default |
+|-----------|---------|
+| IP (initial rate) | 950 bbl/d |
+| Di (initial decline) | 62%/yr |
+| b (hyperbolic exponent) | 1.1 |
+| Capex | $8,500,000 |
+| LOE | $10.00/bbl |
+| WTI price | $78.00/bbl |
+| Severance + ad valorem | 7.5% |
+| Well life | 360 months (30 years) |
+
+### Charts
+
+- **Production decline curve** — monthly rate vs. month, log-y toggle, annotated with Year 1 cumulative and EUR
+- **Cumulative cashflow** — cumsum of monthly cashflow with $0 breakeven line, payback month marker, red/green shading below/above breakeven
+
+---
+
+## Tech Stack & Justification
+
+| Component | Technology | Why |
+|-----------|-----------|-----|
+| Frontend & hosting | **Streamlit** | Fastest path from Python data to hosted interactive UI. Sidebar + tabs model is ideal for a multi-view decision tool. Free hosting via Streamlit Community Cloud. |
+| Data pipeline | **Python / Pandas** | Standard for data engineering workflows; integrates natively with Streamlit. Bronze→Silver→Gold architecture keeps concerns cleanly separated. |
+| AI inference | **Groq API (Llama 3.3 70B)** | Sub-second inference for a conversational UI. Groq's free tier is generous for a hackathon submission. Llama 3.3 70B has strong instruction-following needed for the `(Data)` / `(AI Analysis)` tagging protocol. |
+| Well economics math | **NumPy + numpy-financial** | Pure array math, no Streamlit imports. Fully testable in isolation. `numpy-financial` gives a clean `irr()` implementation with scipy fallback. |
+| Charting | **Plotly** | Interactive, embeds cleanly in Streamlit, supports the log-y toggle and annotation overlays needed for decline curves. |
+| Map | **Plotly Choropleth or Streamlit-Folium** | Region-click-to-focus behavior that passes `map_focus_region` to session state for the well calculator prefill. |
+| Commodity prices | **FRED API** | Official Federal Reserve economic data; WTI price series is well-maintained and free. |
+| Testing | **pytest** | Six unit tests for the well economics math covering: IP at t=0, exponential decay, EUR monotonicity, NPV sign for a profitable well, IRR for an unprofitable well, and payback period range. |
+
+---
+
+## Key Insights
+
+The following are data-grounded observations surfaced by the system during development:
+
+**1. PADD 3 (Gulf Coast) is the dominant crude opportunity.** With projected production above 9,800 Mb/d in 2024 and a positive 5-year trend, the Gulf Coast region — home to the Permian Basin and Eagle Ford — shows the highest absolute volume and a positive OLS slope. Its investment score reflects both volume leadership and comparatively low volatility.
+
+**2. PADD 4 (Rocky Mountain) shows the steepest decline correction risk.** The Bakken's characteristic high-IP/high-decline hyperbolic profile means that short-term production numbers look strong while 5-year decline rates are among the highest of any PADD. The well economics calculator illustrates this: a Bakken-like well with Di = 78%/yr reaches 50% of IP within roughly 9 months.
+
+**3. Natural gas regions face a structural headwind from the 2023–2024 price environment.** With Henry Hub around $2–$3/Mcf through most of the fitted period, revenue potential KPIs for Appalachian and Haynesville gas plays are suppressed even where production volumes are robust. The Estimated Revenue Potential KPI flags this directly when WTI-equivalent price is toggled.
+
+**4. PADD 1 (East Coast) is the lowest-priority crude region.** Low IP norms, conventional decline profiles, and absence of major unconventional development keep both the RPI and investment score near the bottom. A well economics run confirms that PADD 1 crude defaults do not pencil at current WTI pricing.
+
+**5. Permian well economics are robust across a wide price range.** Using PADD 3 defaults (IP=950, Di=62%, capex=$8.5M), NPV @ 10% is positive above approximately $58/bbl WTI — a useful floor price signal for investment underwriting decisions.
+
+---
+
+## AI Coding Tools Usage
+
+AI coding assistance (Claude) was used throughout this project in the following ways:
+
+- **Architecture planning:** Phase 3 (AI Analyst) and Phase 4 (Well Economics) design documents were developed with AI assistance, producing the detailed specifications implemented in `src/ai/` and `src/economics/`.
+- **Code scaffolding:** Function signatures, docstrings, and test stubs were drafted with AI help and then refined against actual data behavior.
+- **Documentation:** This README was written with AI assistance using the hackathon requirements and implementation planning documents as source material.
+- **All AI assistance is documented here per the hackathon rules.** Final code, data pipeline behavior, and analytical decisions are the author's own.
+
+---
+
+## Repository Structure
+
+```
+energy-intelligence-system/
+├── app.py                        # Main entrypoint — st.tabs() layout
+├── requirements.txt              # All dependencies, pinned
+├── README.md                     # This file
+│
+├── scripts/
+│   ├── ingest.py                 # Bronze layer: pull from EIA + FRED APIs
+│   ├── transform.py              # Silver layer: clean + normalize
+│   ├── compute_gold.py           # Gold layer: KPIs + forecasts
+│   └── verify_pipeline.py        # Health check — confirms Gold data exists
+│
+├── src/
+│   ├── data/
+│   │   └── loaders.py            # Cached Gold layer readers
+│   ├── ai/
+│   │   ├── client.py             # Groq API wrapper
+│   │   ├── prompts.py            # Context builder, system prompt, tag parser, basin map
+│   │   └── intents.py            # Intent classifier + structured artifact builders
+│   ├── economics/
+│   │   ├── __init__.py
+│   │   ├── well_model.py         # Arps decline + NPV/IRR/payback (pure Python)
+│   │   └── region_defaults.py    # Industry-norm presets per PADD/state
+│   └── ui/
+│       ├── map_tab.py
+│       ├── charts.py
+│       ├── compare.py
+│       ├── sensitivity.py
+│       └── well_calculator.py    # Well Economics tab UI
+│
+├── data/
+│   ├── bronze/                   # Raw API responses (immutable)
+│   ├── silver/                   # Cleaned, normalized time series
+│   └── gold/                     # Analytics-ready: actuals, forecasts, KPIs, metadata
+│
+├── tests/
+│   └── test_well_model.py        # 6 unit tests for well economics math
+│
 └── docs/
-    ├── walkthrough.md      # Link to your 5-minute walkthrough video
-    ├── architecture.md     # Your architecture overview and data flow
-    ├── kpi_definitions.md  # Definitions and logic for each KPI you built
-    └── reflection.md       # What you built, tradeoffs, AI tools used
+    ├── architecture.md           # System design detail
+    └── kpi_definitions.md        # Full KPI formulas and business rationale
 ```
 
 ---
 
-## 🚀 Getting Started
+## Running Locally (Optional)
 
-1. **Read the problem statement** — [`PROBLEM_STATEMENT.md`](./PROBLEM_STATEMENT.md)
-2. **Fill out your planning document** — [`planning/PLANNING.md`](./planning/PLANNING.md) before writing any code
-3. **Build your solution** inside the `src/` directory
-4. **Deploy** to Vercel, Netlify, Streamlit Cloud, Railway, or similar — set your API keys as environment variables in your hosting dashboard, never in the repo
-5. **Update this README** with your live URL and reflections before the deadline
+> The live URL is the submission. These instructions are for reference only.
 
----
+```bash
+# 1. Clone and install
+git clone <repo-url>
+cd energy-intelligence-system
+pip install -r requirements.txt
 
-## 📦 Submission Checklist
+# 2. Set environment variables
+export EIA_API_KEY="your_eia_key"
+export FRED_API_KEY="your_fred_key"
+export GROQ_API_KEY="your_groq_key"
 
-Push to your designated repository before the **5-day deadline**. Your repo state at the deadline is your submission.
+# 3. Run the pipeline (populates Bronze → Silver → Gold)
+python scripts/ingest.py
+python scripts/transform.py
+python scripts/compute_gold.py
 
-- [ ] Live deployment URL added at the top of this README — **mandatory**
-- [ ] Completed planning document in `planning/PLANNING.md`
-- [ ] Working application in `src/`
-- [ ] `docs/walkthrough.md` — walkthrough video link filled in
-- [ ] `docs/architecture.md` — architecture overview and data flow filled in
-- [ ] `docs/kpi_definitions.md` — all KPIs defined with calculation logic
-- [ ] `docs/reflection.md` — reflection filled in
-- [ ] Clean commit history — see note below
+# 4. Verify pipeline health
+python scripts/verify_pipeline.py
 
----
+# 5. Run unit tests
+pytest tests/test_well_model.py -v
 
-## 🎥 Video Requirements
+# 6. Launch the app
+streamlit run app.py
+```
 
-Your 5-minute walkthrough video is mandatory. It must cover:
-
-- What you built and why
-- How your system works end to end
-- Your forecasting approach and its assumptions
-- KPI definitions and how they support business decisions
-- System walkthrough including the year selector in action
-- How you used AI and what value it adds
-- Key insights and any investment recommendations surfaced by the system
-
-Link your video in `docs/walkthrough.md` before the deadline.
-
----
-
-## 📝 A Note on Commit History
-
-Your git commit history is part of the evaluation. Here is what a clean history looks like:
-
-- **Commit regularly** — at least once per meaningful chunk of work (e.g. "Add EIA data ingestion", "Build forecasting engine", "Surface Projected Production KPI")
-- **Write descriptive messages** — not "fix", "update", or "asdf". A good message tells someone what changed and why
-- **Do not squash everything into one commit** at the end — we should be able to follow your progress through the history
-- **Do not commit API keys, `.env` files, or `node_modules`** — use `.gitignore`
-
-Think of your commit history as a log of how you think and work, not just a save button.
-
----
