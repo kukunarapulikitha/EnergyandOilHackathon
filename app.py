@@ -1190,7 +1190,12 @@ def tab_sensitivity(actuals, forecasts, ctrl):
         xaxis_title="Production shock",
         yaxis_title="WTI price shock",
     )
-    st.plotly_chart(heatmap_fig, use_container_width=True)
+    st.plotly_chart(
+        heatmap_fig,
+        use_container_width=True,
+        key="revenue_sensitivity_heatmap",
+        config={"displayModeBar": False},
+    )
     st.caption(
         f"Cells scale linearly between worst corner (${matrix_df.values.min()/1e9:,.1f}B) "
         f"and best corner (${matrix_df.values.max()/1e9:,.1f}B). "
