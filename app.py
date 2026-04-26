@@ -1168,13 +1168,27 @@ def tab_sensitivity(actuals, forecasts, ctrl):
     import plotly.graph_objects as go
 
     heatmap_text = matrix_df.apply(lambda col: col.map(_fmt_cell)).values
+    z_values = matrix_df.astype(float).values
+    zmin = float(z_values.min())
+    zmax = float(z_values.max())
+    zmid = float(matrix_df.loc["+0%", "+0%"]) if "+0%" in matrix_df.index and "+0%" in matrix_df.columns else float(z_values.mean())
+    flat_surface = abs(zmax - zmin) < 1e-9
+
+    if flat_surface:
+        st.warning(
+            "All scenarios resolve to the same revenue value for this selection, "
+            "so the heat map cannot show a gradient. Try a different year or region."
+        )
+
     heatmap_fig = go.Figure(
         data=go.Heatmap(
-            z=matrix_df.values,
+            z=z_values,
             x=[str(c) for c in matrix_df.columns],
             y=[str(i) for i in matrix_df.index],
             colorscale="RdYlGn",
-            zmid=float(matrix_df.values.mean()),
+            zmin=zmin,
+            zmax=(zmax if not flat_surface else zmax + 1.0),
+            zmid=zmid,
             text=heatmap_text,
             texttemplate="%{text}",
             hovertemplate=(
@@ -1183,6 +1197,7 @@ def tab_sensitivity(actuals, forecasts, ctrl):
                 "Revenue: %{text}<extra></extra>"
             ),
             colorbar=dict(title=dict(text="Revenue", side="right")),
+            showscale=True,
         )
     )
     heatmap_fig.update_layout(
