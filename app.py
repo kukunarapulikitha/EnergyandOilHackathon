@@ -82,22 +82,17 @@ FORECAST_HORIZON = 2036
 
 
 def render_header(meta: dict) -> None:
-    col1, col2, col3 = st.columns([0.60, 0.20, 0.20])
+    col1, col2 = st.columns([0.80, 0.20])
     with col1:
         st.title("⚡ Energy Intelligence System")
         st.caption(
             "U.S. oil & gas production analysis with linear-regression "
             "forecasting and Medallion data architecture."
         )
-    with col2:
         if meta:
-            dqs = meta.get("dqs", {})
-            score = dqs.get("score", 0)
-            color = "🟢" if score >= 80 else "🟡" if score >= 60 else "🔴"
-            st.metric("Data Quality", f"{color} {score:.1f}/100")
             from src.ui.provenance import fresh_age
-            st.caption(f"Updated {fresh_age(meta.get('fetched_at'))}")
-    with col3:
+            st.caption(f"Data last updated: {fresh_age(meta.get('fetched_at'))}")
+    with col2:
         st.markdown("&nbsp;")  # vertical spacer
         if st.button("🔄 Refresh data", help="Re-run the EIA pipeline and reload the app"):
             _refresh_data(meta)
