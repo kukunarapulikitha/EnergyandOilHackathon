@@ -1055,9 +1055,20 @@ def tab_sensitivity(actuals, forecasts, ctrl):
         return
 
     fa = actuals[actuals["fuel_type"] == ctrl["fuel"]]
+
+    # Pre-select map-clicked region if it's in the current fuel + region list
+    region_options = ff["region_id"].tolist()
+    pinned = st.session_state.get("map_focus_region")
+    pinned_fuel = st.session_state.get("map_focus_fuel")
+    default_idx = 0
+    if pinned and pinned_fuel == ctrl["fuel"] and pinned in region_options:
+        default_idx = region_options.index(pinned)
+        st.caption(f"📍 Pre-selected from map click ({pinned}). Change via dropdown if needed.")
+
     region_id = st.selectbox(
         "Region",
-        options=ff["region_id"].tolist(),
+        options=region_options,
+        index=default_idx,
         format_func=lambda rid: (
             fa[fa["region_id"] == rid]["region_name"].iloc[0]
             if rid in fa["region_id"].values else rid
