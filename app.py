@@ -1160,38 +1160,37 @@ def tab_sensitivity(actuals, forecasts, ctrl):
         f"× **{base_production:,.0f} Mb/d**."
     )
 
-    # Format every cell as $X.YB / $XXM and render with a Plotly heatmap.
+    # Format every cell as $X.YB / $XXM
     def _fmt_cell(v: float) -> str:
         return f"${v/1e9:.1f}B" if v >= 1e9 else f"${v/1e6:.0f}M"
 
+    # Render heatmap with Plotly so this tab does not depend on matplotlib.
     import plotly.graph_objects as go
 
-    cell_text = [[_fmt_cell(float(v)) for v in row_vals] for row_vals in matrix_df.values]
-    fig = go.Figure(
-        go.Heatmap(
+    heatmap_text = matrix_df.apply(lambda col: col.map(_fmt_cell)).values
+    heatmap_fig = go.Figure(
+        data=go.Heatmap(
             z=matrix_df.values,
             x=[str(c) for c in matrix_df.columns],
             y=[str(i) for i in matrix_df.index],
             colorscale="RdYlGn",
-            zmid=baseline_usd,
-            text=cell_text,
+            zmid=float(matrix_df.values.mean()),
+            text=heatmap_text,
             texttemplate="%{text}",
-            textfont=dict(size=11),
             hovertemplate=(
                 "Price shock: %{y}<br>"
                 "Production shock: %{x}<br>"
                 "Revenue: %{text}<extra></extra>"
             ),
-            colorbar=dict(title=dict(text="Revenue (USD/yr)", side="right")),
+            colorbar=dict(title=dict(text="Revenue", side="right")),
         )
     )
-    fig.update_layout(
+    heatmap_fig.update_layout(
+        margin=dict(l=20, r=20, t=10, b=10),
         xaxis_title="Production shock",
         yaxis_title="WTI price shock",
-        margin=dict(l=70, r=20, t=20, b=70),
-        height=480,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(heatmap_fig, use_container_width=True)
     st.caption(
         f"Cells scale linearly between worst corner (${matrix_df.values.min()/1e9:,.1f}B) "
         f"and best corner (${matrix_df.values.max()/1e9:,.1f}B). "
