@@ -1445,13 +1445,13 @@ def main() -> None:
                 ),
             )
 
-        # 2. Regional forecast chart — always visible, independent of map
-        with st.container(border=True):
-            tab_regional_forecast(actuals, forecasts, annual_silver, ctrl)
-
-        # 3. Production map — standalone, click updates forecast chart above
+        # 2. Production map — top, click to focus region
         with st.container(border=True):
             tab_workspace(actuals, forecasts, annual_silver, ctrl)
+
+        # 3. Regional forecast chart — below map, always visible
+        with st.container(border=True):
+            tab_regional_forecast(actuals, forecasts, annual_silver, ctrl)
 
         # 4. Sensitivity heatmap (crude only)
         if ctrl["fuel"] == "crude_oil":
