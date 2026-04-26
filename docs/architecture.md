@@ -14,7 +14,7 @@
 | Forecasting | scikit-learn (LinearRegression) | OLS per region and fuel type |
 | Visualization | Plotly | Choropleth map, trend charts, sensitivity charts |
 | AI inference | Groq API — Llama 3.3 70B Versatile | Conversational analyst, grounded in Gold data |
-| Commodity prices | FRED API | Live WTI price context for revenue KPIs |
+| Commodity prices | EIA WTI Spot Price | Live WTI price context for revenue KPIs |
 | Production data | EIA Open Data API | Primary source for oil and gas production by state/PADD |
 | Hosting | Streamlit Community Cloud | Live deployment, environment variable management |
 
@@ -34,7 +34,7 @@ src/
 ├── requirements.txt
 │
 ├── scripts/
-│   ├── ingest.py                 # Bronze: pulls EIA + FRED via API, writes raw files
+│   ├── ingest.py                 # Bronze: pulls EIA v2 API, writes raw files
 │   ├── transform.py              # Silver: normalizes regions, aligns time series, handles nulls
 │   ├── compute_gold.py           # Gold: computes KPIs, fits OLS per region, writes forecasts
 │   └── verify_pipeline.py        # Health check — confirms Gold layer exists and is fresh
@@ -72,7 +72,7 @@ data/
 ## Cross-Tab Data Flow
 
 ```
-EIA API + FRED API
+EIA Open Data API v2
        │
        ▼ scripts/ingest.py
   data/bronze/          ← raw JSON, never modified after write

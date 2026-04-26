@@ -74,42 +74,73 @@ def provenance_popover(
             st.markdown(f"**Fetched:** {fetched_at} ({fresh_age(fetched_at)})")
 
 
+_EIA_LINKS = {
+    "crude_oil": {
+        "label": "EIA Crude Oil Production by PADD",
+        "url": "https://www.eia.gov/dnav/pet/pet_crd_crpdn_adc_mbblpd_m.htm",
+        "api": "https://api.eia.gov/v2/petroleum/crd/crpdn/data/",
+    },
+    "natural_gas": {
+        "label": "EIA Natural Gas Marketed Production by State",
+        "url": "https://www.eia.gov/dnav/ng/ng_prod_sum_a_EPG0_VGM_mmcf_m.htm",
+        "api": "https://api.eia.gov/v2/natural-gas/prod/sum/data/",
+    },
+    "wti": {
+        "label": "EIA WTI Crude Spot Price (Cushing, OK)",
+        "url": "https://www.eia.gov/dnav/pet/pet_pri_spt_s1_d.htm",
+        "api": "https://api.eia.gov/v2/petroleum/pri/spt/data/",
+    },
+    "browser": {
+        "label": "EIA Open Data Browser — verify any number",
+        "url": "https://www.eia.gov/opendata/browser/",
+        "api": None,
+    },
+}
+
+
 def render_data_sources_panel(meta: dict) -> None:
-    """Full data-sources footer — shown at the bottom of every tab."""
-    with st.expander("ℹ️ Data Sources & Provenance", expanded=False):
+    """Full data-sources footer with clickable links to the actual EIA data pages."""
+    with st.expander("ℹ️ Data Sources & Provenance — click to verify", expanded=False):
         if not meta:
             st.caption("No metadata available. Run the pipeline first.")
-            return
-
-        st.markdown(
-            f"**Primary source:** {meta.get('source', '—')}  ·  "
-            f"**Version:** {meta.get('version', '—')}  ·  "
-            f"**Fetched:** {meta.get('fetched_at', '—')[:19]} UTC "
-            f"({fresh_age(meta.get('fetched_at'))})"
-        )
-
-        endpoints = meta.get("endpoints", [])
-        if endpoints:
-            st.markdown("**Endpoints:**")
-            for ep in endpoints:
-                st.markdown(f"- `{ep}`")
-
-        rc = meta.get("row_counts", {})
-        if rc:
-            st.markdown("**Row counts:**")
-            cols = st.columns(len(rc))
-            for (k, v), col in zip(rc.items(), cols):
-                col.metric(k.replace("_", " ").title(), f"{v:,}")
-
-        dqs = meta.get("dqs", {})
-        if dqs:
+        else:
             st.markdown(
-                f"**Data Quality Score:** {dqs.get('score', 0):.1f} / 100 "
-                f"(completeness={dqs.get('completeness', 0):.0%} · "
-                f"consistency={dqs.get('consistency', 0):.0%} · "
-                f"freshness={dqs.get('freshness', 0):.0%})"
+                f"**Primary source:** {meta.get('source', '—')}  ·  "
+                f"**Version:** {meta.get('version', '—')}  ·  "
+                f"**Fetched:** {meta.get('fetched_at', '—')[:19]} UTC "
+                f"({fresh_age(meta.get('fetched_at'))})"
             )
+            rc = meta.get("row_counts", {})
+            if rc:
+                cols = st.columns(len(rc))
+                for (k, v), col in zip(rc.items(), cols):
+                    col.metric(k.replace("_", " ").title(), f"{v:,}")
+            dqs = meta.get("dqs", {})
+            if dqs:
+                st.markdown(
+                    f"**Data Quality Score:** {dqs.get('score', 0):.1f}/100 "
+                    f"(completeness={dqs.get('completeness', 0):.0%} · "
+                    f"consistency={dqs.get('consistency', 0):.0%} · "
+                    f"freshness={dqs.get('freshness', 0):.0%})"
+                )
+            dr = meta.get("date_range", {})
+            if dr:
+                st.caption(f"Coverage: {dr.get('start', '?')} → {dr.get('end', '?')}")
 
-        dr = meta.get("date_range", {})
-        if dr:
-            st.caption(f"Coverage: {dr.get('start', '?')} → {dr.get('end', '?')}")
+        st.divider()
+        st.markdown("**📡 Verify the underlying data directly at EIA:**")
+
+        for key, info in _EIA_LINKS.items():
+            col_label, col_view, col_api = st.columns([0.50, 0.25, 0.25])
+            col_label.markdown(f"**{info['label']}**")
+            col_view.link_button("🔗 View data", info["url"], use_container_width=True)
+            if info["api"]:
+                col_api.link_button(
+                    "⚙️ API endpoint", info["api"], use_container_width=True
+                )
+
+        st.caption(
+            "Every number in this dashboard is computed from the EIA Open Data API v2. "
+            "Click **View data** to open the corresponding EIA table in your browser "
+            "and cross-check any figure independently."
+        )
