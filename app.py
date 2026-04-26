@@ -1160,23 +1160,38 @@ def tab_sensitivity(actuals, forecasts, ctrl):
         f"× **{base_production:,.0f} Mb/d**."
     )
 
-    # Format every cell as $X.YB / $XXM and apply gradient + outline baseline
+    # Format every cell as $X.YB / $XXM and render with a Plotly heatmap.
     def _fmt_cell(v: float) -> str:
         return f"${v/1e9:.1f}B" if v >= 1e9 else f"${v/1e6:.0f}M"
 
-    def _highlight_baseline(_v):
-        return ""  # keep table clean; baseline indicated in caption
+    import plotly.graph_objects as go
 
-    styled = (
-        matrix_df.style
-        .background_gradient(cmap="RdYlGn", axis=None, low=0.1, high=0.9)
-        .format(_fmt_cell)
-        .set_properties(**{"text-align": "right", "font-size": "0.92rem"})
-        .set_table_styles([
-            {"selector": "th", "props": [("font-weight", "600"), ("text-align", "center")]},
-        ])
+    cell_text = [[_fmt_cell(float(v)) for v in row_vals] for row_vals in matrix_df.values]
+    fig = go.Figure(
+        go.Heatmap(
+            z=matrix_df.values,
+            x=[str(c) for c in matrix_df.columns],
+            y=[str(i) for i in matrix_df.index],
+            colorscale="RdYlGn",
+            zmid=baseline_usd,
+            text=cell_text,
+            texttemplate="%{text}",
+            textfont=dict(size=11),
+            hovertemplate=(
+                "Price shock: %{y}<br>"
+                "Production shock: %{x}<br>"
+                "Revenue: %{text}<extra></extra>"
+            ),
+            colorbar=dict(title=dict(text="Revenue (USD/yr)", side="right")),
+        )
     )
-    st.dataframe(styled, use_container_width=True)
+    fig.update_layout(
+        xaxis_title="Production shock",
+        yaxis_title="WTI price shock",
+        margin=dict(l=70, r=20, t=20, b=70),
+        height=480,
+    )
+    st.plotly_chart(fig, use_container_width=True)
     st.caption(
         f"Cells scale linearly between worst corner (${matrix_df.values.min()/1e9:,.1f}B) "
         f"and best corner (${matrix_df.values.max()/1e9:,.1f}B). "
