@@ -46,8 +46,6 @@ from src.ui.data_loader import (
     load_annual_silver,
     load_forecasts,
     load_metadata,
-    merge_uploaded_actuals,
-    parse_excel_upload,
     pipeline_ready,
 )
 from src.ui.badges import badge_markdown, classify_region
@@ -107,7 +105,18 @@ def render_header(meta: dict) -> None:
 
 def _refresh_data(meta: dict) -> None:
     """Trigger the full Medallion pipeline. On failure, show stale-data warning."""
+    import os
     import subprocess
+
+    if not os.environ.get("EIA_API_KEY"):
+        st.warning(
+            "⚠️ **EIA_API_KEY not set.** "
+            "The dashboard is running on cached data. "
+            "To refresh: set `EIA_API_KEY` as an environment variable "
+            "(get a free key at https://www.eia.gov/opendata/register.php), then reload."
+        )
+        return
+
     with st.spinner("Fetching latest EIA data → rebuilding Bronze → Silver → Gold..."):
         try:
             result = subprocess.run(
@@ -126,7 +135,8 @@ def _refresh_data(meta: dict) -> None:
             stale_ts = meta.get("fetched_at", "unknown")
             st.warning(
                 f"⚠️ Refresh failed: {exc}. "
-                f"Continuing on cached data from {stale_ts[:19] if isinstance(stale_ts, str) else stale_ts}."
+                f"Continuing on cached data from "
+                f"{stale_ts[:19] if isinstance(stale_ts, str) else stale_ts}."
             )
 
 
@@ -212,41 +222,6 @@ def render_sidebar(actuals: pd.DataFrame, forecasts: pd.DataFrame) -> dict:
             "is reported on the chart legend and Overview table."
         )
 
-        # ---- Excel import ------------------------------------------------
-        st.divider()
-        st.markdown("**📂 Import custom data (Excel)**")
-        st.caption(
-            "Upload a `.xlsx` file to overlay your own production figures on "
-            "the Gold-layer data. Required columns: `region_id`, `fuel_type`, "
-            "`year`, `production`. Export the workbook from the Dashboard tab "
-            "for a pre-formatted template."
-        )
-        uploaded_file = st.file_uploader(
-            "Upload .xlsx",
-            type=["xlsx", "xls"],
-            key="excel_upload",
-            label_visibility="collapsed",
-        )
-        if uploaded_file is not None:
-            parsed_df, err = parse_excel_upload(uploaded_file)
-            if err:
-                st.error(f"❌ {err}")
-            elif parsed_df is not None and not parsed_df.empty:
-                st.session_state["uploaded_actuals"] = parsed_df
-                st.success(
-                    f"✅ Loaded **{len(parsed_df):,}** rows from "
-                    f"`{uploaded_file.name}` — overlaying Gold data."
-                )
-            else:
-                st.error("❌ File parsed but contained no valid rows.")
-
-        if st.session_state.get("uploaded_actuals") is not None:
-            n = len(st.session_state["uploaded_actuals"])
-            st.info(f"📂 **{n:,} uploaded rows** are active.")
-            if st.button("🗑️ Clear imported data", use_container_width=True):
-                del st.session_state["uploaded_actuals"]
-                st.rerun()
-
     return {
         "fuel": fuel,
         "year": selected_year,
@@ -299,18 +274,19 @@ def render_kpi_strip(actuals, forecasts, ctrl) -> None:
             total_value = ff_sel["proj"].sum()
         label = "Projected Production Estimate"
 
-    unit = "Mb/d" if ctrl["fuel"] == "crude_oil" else "MMcf"
-
     c1, c2, c3, c4 = st.columns(4)
     c1.metric(
         label,
-        f"{total_value:,.0f} {unit}",
+        _fmt_production(total_value, ctrl["fuel"]),
         help=(
             "Sum of production across all selected regions for the chosen year. "
             "Shows 'actual' when EIA observed data exists; 'projected' when the "
             "year is beyond the latest data point (OLS linear trend)."
         ),
     )
+    top_prod = fa[fa["year"] == year].nlargest(1, "production")
+    if not top_prod.empty:
+        c1.caption(f"🏆 {top_prod.iloc[0]['region_name']} leads at {_fmt_production(top_prod.iloc[0]['production'], ctrl['fuel'])}")
 
     avg_growth = fa[fa["region_id"].isin(selected) & (fa["year"] == year)][
         "growth_pct"
@@ -324,6 +300,8 @@ def render_kpi_strip(actuals, forecasts, ctrl) -> None:
             "Positive = growth, negative = decline. Averaged across selected regions."
         ),
     )
+    growing = fa[fa["region_id"].isin(selected) & (fa["year"] == year) & (fa["growth_pct"] > 0)]
+    c2.caption(f"📈 {len(growing)} of {len(selected)} regions growing" if pd.notna(avg_growth) else "")
 
     avg_r2 = ff[ff["region_id"].isin(selected)]["r_squared"].mean()
     c3.metric(
@@ -336,6 +314,9 @@ def render_kpi_strip(actuals, forecasts, ctrl) -> None:
             "that region's forecast with caution."
         ),
     )
+    if pd.notna(avg_r2):
+        r2_label = "reliable trend" if avg_r2 >= 0.85 else "moderate fit" if avg_r2 >= 0.60 else "noisy trend"
+        c3.caption(f"{'✅' if avg_r2 >= 0.85 else '⚠️'} {r2_label} — {'projection is grounded' if avg_r2 >= 0.85 else 'treat forecast as directional'}")
 
     avg_score = ff[ff["region_id"].isin(selected)]["investment_score"].mean()
     c4.metric(
@@ -348,6 +329,9 @@ def render_kpi_strip(actuals, forecasts, ctrl) -> None:
             "Higher = stronger investment case."
         ),
     )
+    if pd.notna(avg_score):
+        score_label = "strong investment case" if avg_score >= 70 else "moderate opportunity" if avg_score >= 50 else "proceed with caution"
+        c4.caption(f"{'⭐' if avg_score >= 70 else '🔶' if avg_score >= 50 else '🔴'} {score_label}")
 
 
 def tab_overview(actuals, forecasts, ctrl):
@@ -374,18 +358,19 @@ def tab_overview(actuals, forecasts, ctrl):
             total_value = ff_sel["proj"].sum()
         label = "Projected Production Estimate"
 
-    unit = "Mb/d" if ctrl["fuel"] == "crude_oil" else "MMcf"
-
     c1, c2, c3, c4 = st.columns(4)
     c1.metric(
         label,
-        f"{total_value:,.0f} {unit}",
+        _fmt_production(total_value, ctrl["fuel"]),
         help=(
             "Sum of production across selected regions. "
             "'Actual' = EIA observed data; 'Projected' = OLS trend (slope × year + intercept). "
-            f"Unit: {'thousand barrels/day' if ctrl['fuel'] == 'crude_oil' else 'billion cubic feet/month'}."
+            f"Unit: {'thousand barrels/day' if ctrl['fuel'] == 'crude_oil' else 'million cubic feet/month'}."
         ),
     )
+    top_prod2 = fa[fa["year"] == year].nlargest(1, "production")
+    if not top_prod2.empty:
+        c1.caption(f"🏆 Top: {top_prod2.iloc[0]['region_name']} — {_fmt_production(top_prod2.iloc[0]['production'], ctrl['fuel'])}")
 
     avg_growth = fa[
         fa["region_id"].isin(selected) & (fa["year"] == year)
@@ -399,6 +384,9 @@ def tab_overview(actuals, forecasts, ctrl):
             "Averaged across the selected regions."
         ),
     )
+    if pd.notna(avg_growth):
+        growth_label = "strong expansion" if avg_growth > 5 else "stable" if avg_growth >= 0 else "declining — requires diligence"
+        c2.caption(f"{'📈' if avg_growth >= 0 else '📉'} {growth_label}")
 
     avg_r2 = ff[ff["region_id"].isin(selected)]["r_squared"].mean()
     c3.metric(
@@ -410,6 +398,9 @@ def tab_overview(actuals, forecasts, ctrl):
             "< 0.50 means the trend is noisy — treat forecasts for those regions with caution."
         ),
     )
+    if pd.notna(avg_r2):
+        r2_label2 = "reliable trend" if avg_r2 >= 0.85 else "moderate fit" if avg_r2 >= 0.60 else "noisy — treat as directional"
+        c3.caption(f"{'✅' if avg_r2 >= 0.85 else '⚠️'} {r2_label2}")
 
     avg_score = ff[ff["region_id"].isin(selected)]["investment_score"].mean()
     c4.metric(
@@ -420,6 +411,9 @@ def tab_overview(actuals, forecasts, ctrl):
             "Higher = more attractive investment case. Averaged across selected regions."
         ),
     )
+    if pd.notna(avg_score):
+        score_label2 = "strong investment case" if avg_score >= 70 else "moderate opportunity" if avg_score >= 50 else "proceed with caution"
+        c4.caption(f"{'⭐' if avg_score >= 70 else '🔶' if avg_score >= 50 else '🔴'} {score_label2}")
 
     # Excel export — formula-driven workbook (Tier 2)
     st.download_button(
@@ -1301,27 +1295,14 @@ def tab_ai_analyst(actuals, forecasts, ctrl, meta) -> None:
 # ------------------------------------------------------------------ MAIN
 
 
-def _inject_theme(dark: bool) -> None:
-    """Inject a CSS override for light/dark background without reloading Streamlit."""
-    if dark:
-        bg, surface, text, border = "#0e1117", "#1a1f2e", "#fafafa", "#2d3550"
-    else:
-        bg, surface, text, border = "#f8f9fb", "#ffffff", "#111111", "#dde1ea"
-    st.markdown(
-        f"""
-        <style>
-        .stApp {{ background-color: {bg} !important; color: {text} !important; }}
-        section[data-testid="stSidebar"] {{ background-color: {surface} !important; }}
-        .stTabs [data-baseweb="tab-panel"],
-        div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlock"] {{
-            background-color: {bg};
-        }}
-        div[data-testid="stMetric"] {{ background-color: {surface}; border: 1px solid {border};
-            border-radius: 8px; padding: 10px 14px; }}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+def _fmt_production(value: float, fuel: str) -> str:
+    """Format production numbers with K/M suffix and unit label."""
+    unit = "Mb/d" if fuel == "crude_oil" else "MMcf"
+    if value >= 1_000_000:
+        return f"{value/1_000_000:.2f}M {unit}"
+    if value >= 1_000:
+        return f"{value/1_000:.1f}K {unit}"
+    return f"{value:,.0f} {unit}"
 
 
 def main() -> None:
@@ -1342,22 +1323,6 @@ def main() -> None:
 
     ctrl = render_sidebar(actuals, forecasts)
 
-    # ---- Theme toggle (bottom of sidebar) --------------------------------
-    with st.sidebar:
-        st.divider()
-        dark_mode = st.toggle(
-            "🌙 Dark mode",
-            value=st.session_state.get("dark_mode", True),
-            key="dark_mode",
-            help="Switch between dark and light theme.",
-        )
-    _inject_theme(dark_mode)
-
-    # Overlay any user-uploaded Excel data onto the Gold-layer actuals
-    uploaded_actuals = st.session_state.get("uploaded_actuals")
-    if uploaded_actuals is not None and not uploaded_actuals.empty:
-        actuals = merge_uploaded_actuals(actuals, uploaded_actuals)
-
     # If the map has a focus active on the same fuel, narrow every tab to
     # that one region. The map's "✕ Clear" button removes the state.
     focus_id = st.session_state.get("map_focus_region")
@@ -1374,10 +1339,21 @@ def main() -> None:
 
     # ---- Tab 1: Dashboard -----------------------------------------------
     with tab_dashboard:
-        # 1. Summary KPI strip
+        # 1. Summary KPI strip + Excel export
         with st.container(border=True):
             st.markdown("### 📌 Summary")
             render_kpi_strip(actuals, forecasts, ctrl)
+            st.download_button(
+                "📥 Export to Excel (formula-driven workbook)",
+                data=build_workbook(actuals, forecasts, default_target_year=ctrl["year"]),
+                file_name=f"energy_intelligence_{ctrl['year']}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                help=(
+                    "4-sheet workbook: editable Inputs, raw Production data, "
+                    "forecast parameters, and KPI summary driven by Excel formulas. "
+                    "Change WTI price in Inputs → KPIs recalculate live."
+                ),
+            )
 
         # 2. Regional forecast chart — always visible, independent of map
         with st.container(border=True):
