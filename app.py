@@ -1167,16 +1167,24 @@ def tab_sensitivity(actuals, forecasts, ctrl):
     def _highlight_baseline(_v):
         return ""  # keep table clean; baseline indicated in caption
 
-    styled = (
-        matrix_df.style
-        .background_gradient(cmap="RdYlGn", axis=None, low=0.1, high=0.9)
-        .format(_fmt_cell)
-        .set_properties(**{"text-align": "right", "font-size": "0.92rem"})
-        .set_table_styles([
-            {"selector": "th", "props": [("font-weight", "600"), ("text-align", "center")]},
-        ])
-    )
-    st.dataframe(styled, use_container_width=True)
+    # `Styler.background_gradient` requires matplotlib, which may not be
+    # installed in some Streamlit Cloud environments. Fall back gracefully.
+    try:
+        import matplotlib  # noqa: F401
+
+        styled = (
+            matrix_df.style
+            .background_gradient(cmap="RdYlGn", axis=None, low=0.1, high=0.9)
+            .format(_fmt_cell)
+            .set_properties(**{"text-align": "right", "font-size": "0.92rem"})
+            .set_table_styles([
+                {"selector": "th", "props": [("font-weight", "600"), ("text-align", "center")]},
+            ])
+        )
+        st.dataframe(styled, use_container_width=True)
+    except ImportError:
+        st.info("Heatmap coloring unavailable (matplotlib not installed). Showing values only.")
+        st.dataframe(matrix_df.applymap(_fmt_cell), use_container_width=True)
     st.caption(
         f"Cells scale linearly between worst corner (${matrix_df.values.min()/1e9:,.1f}B) "
         f"and best corner (${matrix_df.values.max()/1e9:,.1f}B). "
