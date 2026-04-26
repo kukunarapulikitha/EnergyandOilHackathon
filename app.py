@@ -1160,23 +1160,37 @@ def tab_sensitivity(actuals, forecasts, ctrl):
         f"× **{base_production:,.0f} Mb/d**."
     )
 
-    # Format every cell as $X.YB / $XXM and apply gradient + outline baseline
+    # Format every cell as $X.YB / $XXM
     def _fmt_cell(v: float) -> str:
         return f"${v/1e9:.1f}B" if v >= 1e9 else f"${v/1e6:.0f}M"
 
-    def _highlight_baseline(_v):
-        return ""  # keep table clean; baseline indicated in caption
+    # Render heatmap with Plotly so this tab does not depend on matplotlib.
+    import plotly.graph_objects as go
 
-    styled = (
-        matrix_df.style
-        .background_gradient(cmap="RdYlGn", axis=None, low=0.1, high=0.9)
-        .format(_fmt_cell)
-        .set_properties(**{"text-align": "right", "font-size": "0.92rem"})
-        .set_table_styles([
-            {"selector": "th", "props": [("font-weight", "600"), ("text-align", "center")]},
-        ])
+    heatmap_text = matrix_df.apply(lambda col: col.map(_fmt_cell)).values
+    heatmap_fig = go.Figure(
+        data=go.Heatmap(
+            z=matrix_df.values,
+            x=[str(c) for c in matrix_df.columns],
+            y=[str(i) for i in matrix_df.index],
+            colorscale="RdYlGn",
+            zmid=float(matrix_df.values.mean()),
+            text=heatmap_text,
+            texttemplate="%{text}",
+            hovertemplate=(
+                "Price shock: %{y}<br>"
+                "Production shock: %{x}<br>"
+                "Revenue: %{text}<extra></extra>"
+            ),
+            colorbar=dict(title=dict(text="Revenue", side="right")),
+        )
     )
-    st.dataframe(styled, use_container_width=True)
+    heatmap_fig.update_layout(
+        margin=dict(l=20, r=20, t=10, b=10),
+        xaxis_title="Production shock",
+        yaxis_title="WTI price shock",
+    )
+    st.plotly_chart(heatmap_fig, use_container_width=True)
     st.caption(
         f"Cells scale linearly between worst corner (${matrix_df.values.min()/1e9:,.1f}B) "
         f"and best corner (${matrix_df.values.max()/1e9:,.1f}B). "
