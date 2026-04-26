@@ -1089,16 +1089,47 @@ def tab_sensitivity(actuals, forecasts, ctrl):
 
 
 _DATA_BOX_STYLE = (
-    "background:#0f2a44;padding:10px 14px;border-radius:6px;"
-    "border-left:4px solid #4a90d9;margin:6px 0;color:#e8f1fb;"
+    "background:#0f2a44;padding:9px 13px;border-radius:6px;"
+    "border-left:4px solid #4a90d9;margin:4px 0;color:#e8f1fb;font-size:0.92rem;"
 )
 _AI_BOX_STYLE = (
-    "background:#3a2a05;padding:10px 14px;border-radius:6px;"
-    "border-left:4px solid #f0a500;margin:6px 0;color:#fff5dc;"
+    "background:#3a2a05;padding:9px 13px;border-radius:6px;"
+    "border-left:4px solid #f0a500;margin:4px 0;color:#fff5dc;font-size:0.92rem;"
 )
 _UNTAGGED_STYLE = (
-    "padding:8px 12px;border-radius:6px;margin:6px 0;color:inherit;opacity:0.85;"
+    "padding:6px 10px;border-radius:6px;margin:4px 0;color:inherit;opacity:0.85;font-size:0.92rem;"
 )
+
+# Follow-up question banks keyed by intent
+_FOLLOWUPS: dict[str, list[str]] = {
+    "ranking": [
+        "Which region has the lowest investment score?",
+        "How does the top region's growth rate compare to the national average?",
+        "What is the revenue potential of the highest-producing region?",
+    ],
+    "summary": [
+        "What is the 5-year decline rate for this region?",
+        "How does this region's volatility compare to its peers?",
+        "What would a 10% steeper decline rate mean for this forecast?",
+    ],
+    "sensitivity": [
+        "Which region is most resilient to a steeper decline rate?",
+        "What is the base-case projected production for {year}?",
+        "How does this scenario affect overall revenue potential?",
+    ],
+    "lookup": [
+        "Which region has the highest projected production for {year}?",
+        "Summarize the investment opportunity across all regions.",
+        "What happens if I assume a 15% steeper decline rate?",
+    ],
+}
+
+
+def _get_followups(intent: str, year: int) -> list[str]:
+    """Return 3 contextual follow-up questions for the given intent."""
+    bank = _FOLLOWUPS.get(intent, _FOLLOWUPS["lookup"])
+    target = max(year, 2025)
+    return [q.replace("{year}", str(target)) for q in bank[:3]]
 
 
 def _render_segments(segments: list[dict]) -> None:
@@ -1219,36 +1250,52 @@ def _ai_query(
 
 
 def tab_ai_analyst(actuals, forecasts, ctrl, meta) -> None:
-    st.subheader("🤖 AI Analyst")
-    st.caption(
-        "Ask questions in plain English about regional production, forecasts, "
-        "and KPIs. Answers are grounded in your **live Gold-layer data**. "
-        "📊 blue blocks = data-backed claims · 🔮 amber blocks = AI inference."
-    )
+    # ── Header row: title + legend + clear button ──────────────────────────
+    h_left, h_right = st.columns([0.72, 0.28])
+    with h_left:
+        st.subheader("🤖 AI Analyst")
+        st.caption("Grounded in live EIA data · ask in plain English")
+    with h_right:
+        st.markdown(
+            "<div style='text-align:right;padding-top:6px;font-size:0.82rem;opacity:0.8;'>"
+            "📊 <span style='color:#4a90d9'>blue</span> = data-backed &nbsp;·&nbsp; "
+            "🔮 <span style='color:#f0a500'>amber</span> = AI inference"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        if st.button("🗑️ Clear chat", key="clear_chat", use_container_width=True):
+            st.session_state["messages"] = []
+            st.rerun()
 
     if "messages" not in st.session_state:
         st.session_state["messages"] = []
 
-    # Quick-action buttons — pre-fill common queries for the demo flow
-    qa_cols = st.columns(4)
-    quick_queries = [
-        ("📊 Investment summary",
-         f"Summarize the investment opportunity across all regions for {ctrl['year']} "
-         f"based on current data. Highlight the top 2 and the highest-risk region."),
-        ("🏆 Top region for 2027",
-         "Which region has the highest projected production for 2027?"),
-        ("⛽ Permian Basin",
-         "Summarize the opportunity in the Permian Basin based on current data."),
-        ("📉 What-if 15% decline",
-         "What happens to my forecast if I assume a 15% steeper decline rate?"),
-    ]
-    pending_query: str | None = None
-    for col, (label, q) in zip(qa_cols, quick_queries):
-        if col.button(label, use_container_width=True, key=f"qa_{label}"):
-            pending_query = q
+    # Pick up follow-up queries fired by chip buttons on the previous rerun
+    pending_query: str | None = st.session_state.pop("_pending_followup", None)
 
-    # Render existing chat history
-    for msg in st.session_state["messages"]:
+    # ── Quick-action panel ─────────────────────────────────────────────────
+    with st.container(border=True):
+        st.caption("✨ **Quick actions** — click to ask instantly")
+        qa_cols = st.columns(4)
+        quick_queries = [
+            ("📊 Investment summary",
+             f"Summarize the investment opportunity across all regions for {ctrl['year']} "
+             f"based on current data. Highlight the top 2 and the highest-risk region."),
+            ("🏆 Top region for production",
+             f"Which region has the highest projected production for {max(ctrl['year'], 2025)}?"),
+            ("⛽ Permian Basin",
+             "Summarize the opportunity in the Permian Basin based on current data."),
+            ("📉 What-if 15% decline",
+             "What happens to my forecast if I assume a 15% steeper decline rate?"),
+        ]
+        for col, (label, q) in zip(qa_cols, quick_queries):
+            if col.button(label, use_container_width=True, key=f"qa_{label}"):
+                pending_query = q
+
+    st.divider()
+
+    # ── Chat history ────────────────────────────────────────────────────────
+    for i, msg in enumerate(st.session_state["messages"]):
         if msg["role"] == "user":
             with st.chat_message("user"):
                 st.markdown(msg["raw"])
@@ -1257,21 +1304,51 @@ def tab_ai_analyst(actuals, forecasts, ctrl, meta) -> None:
                 _render_artifact(msg.get("artifact"))
                 segments = parse_tagged_response(msg["raw"])
                 _render_segments(segments)
-                with st.expander("↳ Data sent to AI (proves grounding)"):
+                with st.expander("↳ Context sent to AI", expanded=False):
                     st.code(msg.get("context", ""), language="text")
 
-    # Chat input — accepts free-text questions; quick-action buttons override
-    typed = st.chat_input("Ask about regions, forecasts, or KPIs…")
+                # Follow-up question chips — only on the last assistant message
+                if i == len(st.session_state["messages"]) - 1:
+                    intent = msg.get("intent", "lookup")
+                    followups = _get_followups(intent, ctrl["year"])
+                    st.markdown(
+                        "<div style='font-size:0.8rem;opacity:0.65;margin:8px 0 4px;'>"
+                        "💬 Follow-up questions</div>",
+                        unsafe_allow_html=True,
+                    )
+                    fq_cols = st.columns(3)
+                    for fq_col, fq in zip(fq_cols, followups):
+                        if fq_col.button(
+                            fq,
+                            key=f"fq_{i}_{fq[:30]}",
+                            use_container_width=True,
+                        ):
+                            pending_query = fq
+
+    # ── Empty state ─────────────────────────────────────────────────────────
+    if not st.session_state["messages"]:
+        st.markdown(
+            """
+            <div style='text-align:center;padding:40px 20px;opacity:0.6;'>
+                <div style='font-size:2.5rem;'>🤖</div>
+                <div style='font-size:1.05rem;margin:8px 0 4px;font-weight:600;'>
+                    Ask anything about U.S. oil &amp; gas production
+                </div>
+                <div style='font-size:0.88rem;'>
+                    Try a quick action above, or type your own question below
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # ── Chat input ──────────────────────────────────────────────────────────
+    typed = st.chat_input("Ask about regions, forecasts, KPIs, or what-if scenarios…")
     query = pending_query or typed
     if not query:
-        if not st.session_state["messages"]:
-            st.info(
-                "👆 Click a quick action above, or type a question below. "
-                "Try: *'Which region has the highest projected production for 2027?'*"
-            )
         return
 
-    # Echo the user message immediately
+    # Echo user message immediately
     user_msg = {"role": "user", "raw": query, "context": "", "artifact": None}
     st.session_state["messages"].append(user_msg)
     with st.chat_message("user"):
@@ -1279,17 +1356,33 @@ def tab_ai_analyst(actuals, forecasts, ctrl, meta) -> None:
 
     # Run the query (history excludes the just-appended user message)
     history_for_llm = st.session_state["messages"][:-1]
-    assistant_msg = _ai_query(
-        query, actuals, forecasts, ctrl, meta, history_for_llm,
-    )
+    assistant_msg = _ai_query(query, actuals, forecasts, ctrl, meta, history_for_llm)
     st.session_state["messages"].append(assistant_msg)
 
     with st.chat_message("assistant"):
         _render_artifact(assistant_msg.get("artifact"))
         segments = parse_tagged_response(assistant_msg["raw"])
         _render_segments(segments)
-        with st.expander("↳ Data sent to AI (proves grounding)"):
+        with st.expander("↳ Context sent to AI", expanded=False):
             st.code(assistant_msg.get("context", ""), language="text")
+
+        # Follow-up chips for the fresh response
+        intent = assistant_msg.get("intent", "lookup")
+        followups = _get_followups(intent, ctrl["year"])
+        st.markdown(
+            "<div style='font-size:0.8rem;opacity:0.65;margin:8px 0 4px;'>"
+            "💬 Follow-up questions</div>",
+            unsafe_allow_html=True,
+        )
+        fq_cols = st.columns(3)
+        for fq_col, fq in zip(fq_cols, followups):
+            if fq_col.button(
+                fq,
+                key=f"fq_new_{fq[:30]}",
+                use_container_width=True,
+            ):
+                st.session_state["_pending_followup"] = fq
+                st.rerun()
 
 
 # ------------------------------------------------------------------ MAIN
