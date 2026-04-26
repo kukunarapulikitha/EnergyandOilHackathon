@@ -2,8 +2,8 @@
 
 > **Add your walkthrough video link here before submission.**
 
-**Video Link:** <!-- e.g. https://www.loom.com/share/your-video-id -->
-
+**Video Link:** [<!-- e.g. https://www.loom.com/share/your-video-id -->
+](https://www.loom.com/share/04c15f25e4724c61a5cec852d4619da3)
 The video should be ~5 minutes and cover:
 - A live demo of your deployed dashboard
 - A brief walkthrough of your key technical decisions
