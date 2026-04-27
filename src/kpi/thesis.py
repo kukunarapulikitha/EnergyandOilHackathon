@@ -223,3 +223,64 @@ def build_revenue_sensitivity_matrix(
     )
     df.index.name = "↓ Price / Production →"
     return df, base_revenue
+
+
+def build_decline_price_matrix(
+    forecast_row: pd.Series,
+    target_year: int,
+    fuel: str,
+    decline_scenarios: tuple[float, ...] = (-0.05, 0.0, 0.05, 0.10, 0.15, 0.20, 0.25),
+    crude_prices: tuple[float, ...] = (50.0, 60.0, 70.0, 80.0, 90.0, 100.0),
+    gas_prices: tuple[float, ...] = (2.0, 2.50, 3.0, 3.50, 4.0, 4.50),
+) -> tuple[pd.DataFrame, pd.DataFrame, float, float]:
+    """Decline rate × price scenario matrix for production and revenue.
+
+    Rows (↓): annual decline rate scenarios applied from trained_through_year
+              to target_year. Negative rate = production growth.
+    Columns (→): price assumptions (WTI $/bbl for crude; Henry Hub $/MMBtu for gas).
+
+    Each cell:
+        years_ahead = max(target_year - trained_through_year, 0)
+        adjusted_prod = base_production × (1 − decline_rate)^years_ahead
+        revenue (crude) = adjusted_prod × 1000 × 365 × price
+        revenue (gas)   = adjusted_prod × 1_000_000 × price
+
+    Note: production is constant within each row (price doesn't affect volume).
+    Returns (prod_df, rev_df, base_production, trained_through_year).
+    """
+    slope = float(forecast_row["slope"])
+    intercept = float(forecast_row["intercept"])
+    trained_through = int(forecast_row["trained_through_year"])
+    base_production = max(slope * target_year + intercept, 0.0)
+    years_ahead = max(target_year - trained_through, 0)
+
+    prices = crude_prices if fuel == "crude_oil" else gas_prices
+
+    prod_rows, rev_rows = [], []
+    for dr in decline_scenarios:
+        adjusted = max(base_production * ((1 - dr) ** years_ahead), 0.0)
+        prod_row, rev_row = [], []
+        for price in prices:
+            revenue = (
+                adjusted * 1000 * 365 * price
+                if fuel == "crude_oil"
+                else adjusted * 1_000_000 * price
+            )
+            prod_row.append(adjusted)
+            rev_row.append(revenue)
+        prod_rows.append(prod_row)
+        rev_rows.append(rev_row)
+
+    row_labels = [f"{dr*100:+.0f}%/yr" for dr in decline_scenarios]
+    col_labels = (
+        [f"${p:.0f}/bbl" for p in prices]
+        if fuel == "crude_oil"
+        else [f"${p:.2f}/MMBtu" for p in prices]
+    )
+
+    prod_df = pd.DataFrame(prod_rows, index=row_labels, columns=col_labels)
+    rev_df = pd.DataFrame(rev_rows, index=row_labels, columns=col_labels)
+    prod_df.index.name = "↓ Decline Rate / Price →"
+    rev_df.index.name = "↓ Decline Rate / Price →"
+
+    return prod_df, rev_df, base_production, float(trained_through)

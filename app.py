@@ -1086,15 +1086,8 @@ def tab_workspace(actuals, forecasts, annual_silver, ctrl):
         st.caption(f"ℹ️ {c}")
 
 
-def tab_sensitivity(actuals, forecasts, ctrl):
+def tab_sensitivity(actuals, forecasts, annual_silver, ctrl):
     st.subheader("🎛️ Sensitivity Analysis")
-
-    if ctrl["fuel"] != "crude_oil":
-        st.info(
-            "Revenue sensitivity is only meaningful for crude oil. "
-            "Switch to 🛢️ Crude oil in the sidebar."
-        )
-        return
 
     fuel_forecasts = forecasts[forecasts["fuel_type"] == ctrl["fuel"]]
     if fuel_forecasts.empty:
@@ -1139,14 +1132,27 @@ def tab_sensitivity(actuals, forecasts, ctrl):
     row = ff[ff["region_id"] == region_id].iloc[0]
     region_label = region_lookup.get(region_id, region_id)
 
-    from src.kpi.thesis import build_revenue_sensitivity_matrix, DEFAULT_WTI
+    from src.kpi.thesis import build_decline_price_matrix, DEFAULT_WTI, DEFAULT_HENRY_HUB
+    from src.kpi.calculations import decline_rate as compute_decline_rate
+    import math
 
-    matrix_df, baseline_usd = build_revenue_sensitivity_matrix(
-        row, target_year=ctrl["year"], wti_price=DEFAULT_WTI,
+    _DECLINE_SCENARIOS = (-0.05, 0.0, 0.05, 0.10, 0.15, 0.20, 0.25)
+
+    prod_df, rev_df, base_production, trained_year = build_decline_price_matrix(
+        row, target_year=ctrl["year"], fuel=ctrl["fuel"],
     )
-    base_production = max(
-        float(row["slope"]) * ctrl["year"] + float(row["intercept"]), 0.0
-    )
+
+    # Find which row matches the region's actual 5-yr decline rate
+    annual_fuel = annual_silver[annual_silver["fuel_type"] == ctrl["fuel"]]
+    actual_dr = compute_decline_rate(annual_fuel, region_id, window=5)
+    actual_row_label: str | None = None
+    if not math.isnan(actual_dr):
+        dr_frac = actual_dr / 100.0
+        closest_idx = min(
+            range(len(_DECLINE_SCENARIOS)),
+            key=lambda i: abs(_DECLINE_SCENARIOS[i] - dr_frac),
+        )
+        actual_row_label = prod_df.index[closest_idx]
 
     def _fmt_billions(v: float) -> str:
         raw = f"{v/1e9:.1f}"
@@ -1159,10 +1165,25 @@ def tab_sensitivity(actuals, forecasts, ctrl):
         rgb = tuple(round(s[idx] + (e[idx] - s[idx]) * weight) for idx in range(3))
         return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
 
-    min_v = float(matrix_df.values.min())
-    max_v = float(matrix_df.values.max())
-    rng = max(max_v - min_v, 1.0)
-    baseline_key = "+0%"
+    # Color normalization by revenue
+    all_rev = rev_df.values.flatten()
+    min_rev = float(all_rev.min())
+    max_rev = float(all_rev.max())
+    rev_range = max(max_rev - min_rev, 1.0)
+
+    ref_price = DEFAULT_WTI if ctrl["fuel"] == "crude_oil" else DEFAULT_HENRY_HUB
+    price_label = f"${ref_price:.0f}/bbl" if ctrl["fuel"] == "crude_oil" else f"${ref_price:.2f}/MMBtu"
+    fuel_label = "oil" if ctrl["fuel"] == "crude_oil" else "gas"
+    prod_label = _fmt_production(base_production, ctrl["fuel"])
+    if ctrl["fuel"] == "crude_oil":
+        baseline_rev = base_production * 1000 * 365 * ref_price
+    else:
+        baseline_rev = base_production * 1_000_000 * ref_price
+
+    actual_dr_note = (
+        f" Region's 5-yr trailing decline rate: <b>{actual_dr:.1f}%/yr</b> (amber row)."
+        if actual_row_label else ""
+    )
 
     st.markdown(
         f"""
@@ -1174,11 +1195,11 @@ def tab_sensitivity(actuals, forecasts, ctrl):
             margin-top:4px;
         ">
             <div style="font-size:22px;font-weight:700;color:#172036;margin-bottom:4px;">
-                Revenue sensitivity · {region_label} oil · {ctrl['year']}
+                Production sensitivity · {region_label} {fuel_label} · {ctrl['year']}
             </div>
-            <div style="font-size:18px;color:#5f708a;line-height:1.45;margin-bottom:16px;">
-                Annualized revenue at shocks to WTI price (rows) and oil production (columns). Baseline =
-                <b>{_fmt_billions(baseline_usd)}</b>/yr at {DEFAULT_WTI:.2f} usd/bbl × {base_production:,.0f} bbl/d.
+            <div style="font-size:15px;color:#5f708a;line-height:1.45;margin-bottom:16px;">
+                OLS baseline: <b>{prod_label}</b> at year {ctrl['year']} (model trained through {int(trained_year)}).
+                At {price_label} → <b>{_fmt_billions(baseline_rev)}</b>/yr.{actual_dr_note}
             </div>
         """,
         unsafe_allow_html=True,
@@ -1187,36 +1208,69 @@ def tab_sensitivity(actuals, forecasts, ctrl):
     table_html = [
         '<table style="width:100%;border-collapse:collapse;table-layout:fixed;background:#ffffff;">',
         '<thead><tr>',
-        '<th style="text-align:right;padding:8px 10px;color:#5f708a;font-size:14px;border-bottom:2px solid #d6dce8;">↓ price / production →</th>'
+        '<th style="text-align:right;padding:8px 10px;width:130px;color:#5f708a;font-size:13px;'
+        'border-bottom:2px solid #d6dce8;">Decline / Price</th>',
     ]
-    for col in matrix_df.columns:
+    for col in prod_df.columns:
         table_html.append(
-            f'<th style="text-align:center;padding:8px 10px;color:#5f708a;font-size:14px;border-bottom:2px solid #d6dce8;">{col}</th>'
+            f'<th style="text-align:center;padding:8px 10px;color:#5f708a;font-size:13px;'
+            f'border-bottom:2px solid #d6dce8;">{col}</th>'
         )
     table_html.append('</tr></thead><tbody>')
 
-    for ridx in matrix_df.index:
-        table_html.append('<tr>')
+    for ridx in prod_df.index:
+        is_actual = ridx == actual_row_label
+        row_bg = "background:#fffbe6;" if is_actual else ""
+        left_border = "border-left:3px solid #d97706;" if is_actual else "border-left:1px solid #d6dce8;"
+        badge = " ← actual" if is_actual else ""
+
+        table_html.append(f'<tr style="{row_bg}">')
         table_html.append(
-            f'<th style="text-align:right;padding:10px;color:#5f708a;font-size:16px;font-weight:600;border-right:1px solid #d6dce8;">{ridx}</th>'
+            f'<th style="text-align:right;padding:10px 8px;font-size:13px;font-weight:600;'
+            f'color:#5f708a;{left_border}">{ridx}{badge}</th>'
         )
-        for cidx in matrix_df.columns:
-            val = float(matrix_df.loc[ridx, cidx])
-            weight = (val - min_v) / rng
+        for cidx in prod_df.columns:
+            prod_val = float(prod_df.loc[ridx, cidx])
+            rev_val = float(rev_df.loc[ridx, cidx])
+            weight = (rev_val - min_rev) / rev_range
             bg = _interpolate_hex("#f2dcdd", "#d9efe4", weight)
-            outline = "border:2px solid #1a2033;" if (ridx == baseline_key and cidx == baseline_key) else "border:1px solid transparent;"
+            cell_border = "border:2px solid #d97706;" if is_actual else "border:1px solid transparent;"
+            prod_str = _fmt_production(prod_val, ctrl["fuel"])
+            rev_str = _fmt_billions(rev_val)
             table_html.append(
-                f'<td style="text-align:center;padding:10px 8px;font-size:17px;color:#1a2033;background:{bg};{outline}">{_fmt_billions(val)}</td>'
+                f'<td style="text-align:center;padding:8px 6px;background:{bg};{cell_border}">'
+                f'<div style="font-size:15px;font-weight:700;color:#1a2033;">{prod_str}</div>'
+                f'<div style="font-size:11px;color:#5f708a;margin-top:2px;">{rev_str}/yr</div>'
+                f'</td>'
             )
         table_html.append('</tr>')
 
     table_html.append('</tbody></table>')
     st.markdown("".join(table_html), unsafe_allow_html=True)
+
+    with st.expander("📖 How to read this matrix", expanded=False):
+        st.markdown(
+            f"""
+**Axes**
+- **Rows (↓):** Annual decline rate scenarios applied from the model's training cutoff ({int(trained_year)}) to the selected year ({ctrl['year']}).
+  Negative = production growth; positive = production shrinking each year.
+  The amber-highlighted row is this region's historically-computed 5-year trailing decline rate — the most data-grounded scenario.
+- **Columns (→):** {"WTI crude price assumptions ($/bbl)" if ctrl["fuel"] == "crude_oil" else "Henry Hub gas price assumptions ($/MMBtu)"}
+
+**Each cell shows two values:**
+- **Large:** Projected Production ({("Mb/d" if ctrl["fuel"] == "crude_oil" else "MMcf")}) — `base_production × (1 − decline_rate)^years_ahead`
+- **Small below:** Estimated annual revenue at that price scenario
+
+**Color coding:** Red = weak revenue opportunity · Green = strong opportunity.
+            """
+        )
+
     st.markdown(
         f"""
-            <div style="font-size:17px;color:#5f708a;line-height:1.35;margin-top:14px;">
-                Cells scale linearly between <b>{_fmt_billions(min_v)}</b> (worst corner) and <b>{_fmt_billions(max_v)}</b> (best).
-                Baseline is outlined.
+            <div style="font-size:14px;color:#5f708a;line-height:1.35;margin-top:10px;">
+                Revenue formula: <code>base × (1 − decline)^years_ahead × price</code>.
+                Worst corner = <b>{_fmt_billions(min_rev)}</b> · Best corner = <b>{_fmt_billions(max_rev)}</b>.
+                Drag the year slider to explore sensitivities across the forecast horizon.
             </div>
         </div>
         """,
@@ -1596,10 +1650,9 @@ def main() -> None:
         with st.container(border=True):
             tab_regional_forecast(actuals, forecasts, annual_silver, ctrl)
 
-        # 4. Sensitivity heatmap (crude only)
-        if ctrl["fuel"] == "crude_oil":
-            with st.container(border=True):
-                tab_sensitivity(actuals, forecasts, ctrl)
+        # 4. Sensitivity heatmap
+        with st.container(border=True):
+            tab_sensitivity(actuals, forecasts, annual_silver, ctrl)
 
         # 5. Compare — expander so it doesn't clutter default view
         with st.expander("🆚 Compare regions", expanded=False):
