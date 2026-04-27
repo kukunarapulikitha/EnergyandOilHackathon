@@ -1136,63 +1136,24 @@ def tab_sensitivity(actuals, forecasts, ctrl):
     )
 
     row = ff[ff["region_id"] == region_id].iloc[0]
-    region_label = (
-        fa[fa["region_id"] == region_id]["region_name"].iloc[0]
-        if region_id in fa["region_id"].values else region_id
-    )
 
-    # Build 2D revenue shock matrix (price shocks × production shocks)
-    from src.kpi.thesis import build_revenue_sensitivity_matrix, DEFAULT_WTI
-    matrix_df, baseline_usd = build_revenue_sensitivity_matrix(
-        row, target_year=ctrl["year"], wti_price=DEFAULT_WTI,
-    )
-
-    base_production = max(
-        float(row["slope"]) * ctrl["year"] + float(row["intercept"]), 0.0
-    )
-
-    st.markdown(
-        f"**Revenue sensitivity · {region_label} · {ctrl['year']}**"
-    )
-    st.caption(
-        f"Annualized revenue at shocks to WTI price (rows) and oil production (columns). "
-        f"Baseline = **${baseline_usd/1e9:,.1f}B**/yr at **${DEFAULT_WTI:.2f}/bbl** "
-        f"× **{base_production:,.0f} Mb/d**."
-    )
-
-    # Format every cell as $X.YB / $XXM and apply gradient + outline baseline
-    def _fmt_cell(v: float) -> str:
-        return f"${v/1e9:.1f}B" if v >= 1e9 else f"${v/1e6:.0f}M"
-
-    def _highlight_baseline(_v):
-        return ""  # keep table clean; baseline indicated in caption
-
-    styled = (
-        matrix_df.style
-        .background_gradient(cmap="RdYlGn", axis=None, low=0.1, high=0.9)
-        .format(_fmt_cell)
-        .set_properties(**{"text-align": "right", "font-size": "0.92rem"})
-        .set_table_styles([
-            {"selector": "th", "props": [("font-weight", "600"), ("text-align", "center")]},
-        ])
-    )
-    st.dataframe(styled, use_container_width=True)
-    st.caption(
-        f"Cells scale linearly between worst corner (${matrix_df.values.min()/1e9:,.1f}B) "
-        f"and best corner (${matrix_df.values.max()/1e9:,.1f}B). "
-        f"Center cell (0% / 0%) is the baseline. "
-        f"Revenue is linear in both axes: `base × (1 + price_shock) × (1 + production_shock)`."
+    st.plotly_chart(
+        sensitivity_heatmap(row, target_year=ctrl["year"]),
+        use_container_width=True,
     )
 
     with st.expander("📖 How to read this"):
         st.markdown(
             """
-            **Rows (↓ Price):** % shock applied to WTI spot price. -40% means WTI drops to about $47.
-            **Columns (→ Production):** % shock applied to projected production at the selected year.
-            **Cell value:** annualized revenue in USD under that combined scenario.
+            **X-axis:** WTI crude price assumption ($/bbl).
+            **Y-axis:** Adjustment applied to the fitted OLS slope — negative = steeper decline,
+            positive = production grows faster than the historical trend.
+            **Cell value:** Estimated annual revenue ($B/yr) at the selected year under that
+            price × decline scenario.
 
-            **Use it to answer:** "What happens to my revenue if WTI drops 20% and production
-            comes in 10% below my forecast?" → look at row -20%, column -10%.
+            **Color:** Red = weak revenue opportunity · Green = strong opportunity.
+            Use it to answer: "At what WTI price does this region still make sense even under
+            declining production?"
             """
         )
 
