@@ -1143,12 +1143,16 @@ def tab_sensitivity(actuals, forecasts, annual_silver, ctrl):
             else "Henry Hub gas price (USD/MMBtu)"
         )
         st.markdown(
-            f"""
-- **X-axis:** {price_axis}.
-- **Y-axis:** Decline-rate adjustment to the OLS slope. Negative = steeper decline, positive = production grows faster.
-- **Cells:** Projected annual revenue (in $B) at year **{ctrl['year']}**, computed as
-  `production × price` where `production = (slope × (1 + decline_adj)) × year + intercept`.
-- **Color:** Red = weak opportunity · Green = strong opportunity.
+            """
+            **X-axis:** WTI crude price assumption ($/bbl).
+            **Y-axis:** Adjustment applied to the fitted OLS slope — negative = steeper decline,
+            positive = production grows faster than the historical trend.
+            **Cell value:** Estimated annual revenue ($B/yr) at the selected year under that
+            price × decline scenario.
+
+            **Color:** Red = weak revenue opportunity · Green = strong opportunity.
+            Use it to answer: "At what WTI price does this region still make sense even under
+            declining production?"
             """
         )
 
