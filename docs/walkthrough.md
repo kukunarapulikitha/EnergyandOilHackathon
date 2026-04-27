@@ -9,7 +9,17 @@ Earlier video voice is missing here's new one
 https://www.loom.com/share/9ec10f45e72342388aae14908ae15641
 
 Watch at 2.5x
+
+
+https://drive.google.com/file/d/1a2FBickFo7p4NzAPewLPeZnnPZk1DPXx/view?usp=sharing
+
+
 The video should be ~5 minutes and cover:
 - A live demo of your deployed dashboard
 - A brief walkthrough of your key technical decisions
 - Any tradeoffs or things you'd do differently with more time
+
+
+
+
+
