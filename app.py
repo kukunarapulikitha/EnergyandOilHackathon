@@ -1088,194 +1088,69 @@ def tab_workspace(actuals, forecasts, annual_silver, ctrl):
 
 def tab_sensitivity(actuals, forecasts, annual_silver, ctrl):
     st.subheader("🎛️ Sensitivity Analysis")
-
-    fuel_forecasts = forecasts[forecasts["fuel_type"] == ctrl["fuel"]]
-    if fuel_forecasts.empty:
-        st.warning("No forecasts available for this fuel.")
-        return
-
-    ff = fuel_forecasts[
-        fuel_forecasts["region_id"].isin(ctrl["regions"])
-    ] if ctrl["regions"] else fuel_forecasts
-
-    # If sidebar region filters exclude everything, fall back to all regions
-    # so sensitivity remains interactive via map focus or local selector.
-    if ff.empty:
-        ff = fuel_forecasts
-
-    region_lookup = (
-        actuals[actuals["fuel_type"] == ctrl["fuel"]][["region_id", "region_name"]]
-        .drop_duplicates()
-        .set_index("region_id")["region_name"]
-        .to_dict()
+    st.caption(
+        "Stress-test the forecast across decline-rate × price scenarios. "
+        "Red cells = weak revenue opportunity · green = strong. "
+        "Tied to the year slider — drag it to explore the horizon."
     )
 
-    region_options = ff["region_id"].tolist()
-    pinned = st.session_state.get("map_focus_region")
-    pinned_fuel = st.session_state.get("map_focus_fuel")
+    fa = actuals[actuals["fuel_type"] == ctrl["fuel"]]
+    ff = forecasts[forecasts["fuel_type"] == ctrl["fuel"]]
+    if ctrl["regions"]:
+        ff = ff[ff["region_id"].isin(ctrl["regions"])]
+    if ff.empty:
+        st.info("No forecasts available for this fuel/region selection.")
+        return
+
+    # Shared region selection: map click → forecast tab selectbox → first sidebar region.
+    region_opts = ctrl["regions"] if ctrl["regions"] else ff["region_id"].tolist()
+    if not region_opts:
+        st.info("Select at least one region in the sidebar.")
+        return
+
+    focus_id = st.session_state.get("map_focus_region")
+    focus_fuel = st.session_state.get("map_focus_fuel")
+    forecast_pick = st.session_state.get("forecast_region_select")
+
     default_idx = 0
-    if pinned and pinned_fuel == ctrl["fuel"] and pinned in region_options:
-        default_idx = region_options.index(pinned)
-    elif ctrl["regions"]:
-        first_selected = ctrl["regions"][0]
-        if first_selected in region_options:
-            default_idx = region_options.index(first_selected)
+    if focus_id and focus_fuel == ctrl["fuel"] and focus_id in region_opts:
+        default_idx = region_opts.index(focus_id)
+    elif forecast_pick and forecast_pick in region_opts:
+        default_idx = region_opts.index(forecast_pick)
 
     region_id = st.selectbox(
         "Region",
-        options=region_options,
+        options=region_opts,
         index=default_idx,
-        format_func=lambda rid: region_lookup.get(rid, rid),
-        key="sensitivity_region",
+        format_func=lambda rid: (
+            fa[fa["region_id"] == rid]["region_name"].iloc[0]
+            if rid in fa["region_id"].values else rid
+        ),
+        key="sensitivity_region_select",
+        help="Click a state on the map or change the Forecast tab selection to sync.",
     )
 
     row = ff[ff["region_id"] == region_id].iloc[0]
-    region_label = region_lookup.get(region_id, region_id)
 
-    from src.kpi.thesis import build_decline_price_matrix, DEFAULT_WTI, DEFAULT_HENRY_HUB
-    from src.kpi.calculations import decline_rate as compute_decline_rate
-    import math
-
-    _DECLINE_SCENARIOS = (-0.05, 0.0, 0.05, 0.10, 0.15, 0.20, 0.25)
-
-    prod_df, rev_df, base_production, trained_year = build_decline_price_matrix(
-        row, target_year=ctrl["year"], fuel=ctrl["fuel"],
+    st.plotly_chart(
+        sensitivity_heatmap(row, target_year=ctrl["year"]),
+        use_container_width=True,
     )
 
-    # Find which row matches the region's actual 5-yr decline rate
-    annual_fuel = annual_silver[annual_silver["fuel_type"] == ctrl["fuel"]]
-    actual_dr = compute_decline_rate(annual_fuel, region_id, window=5)
-    actual_row_label: str | None = None
-    if not math.isnan(actual_dr):
-        dr_frac = actual_dr / 100.0
-        closest_idx = min(
-            range(len(_DECLINE_SCENARIOS)),
-            key=lambda i: abs(_DECLINE_SCENARIOS[i] - dr_frac),
+    with st.expander("📖 How to read this heat map"):
+        price_axis = (
+            "WTI crude price (USD/bbl)" if ctrl["fuel"] == "crude_oil"
+            else "Henry Hub gas price (USD/MMBtu)"
         )
-        actual_row_label = prod_df.index[closest_idx]
-
-    def _fmt_billions(v: float) -> str:
-        raw = f"{v/1e9:.1f}"
-        return f"${raw[:-2]}B" if raw.endswith(".0") else f"${raw}B"
-
-    def _interpolate_hex(start_hex: str, end_hex: str, weight: float) -> str:
-        weight = max(0.0, min(1.0, weight))
-        s = tuple(int(start_hex[i:i + 2], 16) for i in (1, 3, 5))
-        e = tuple(int(end_hex[i:i + 2], 16) for i in (1, 3, 5))
-        rgb = tuple(round(s[idx] + (e[idx] - s[idx]) * weight) for idx in range(3))
-        return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
-
-    # Color normalization by revenue
-    all_rev = rev_df.values.flatten()
-    min_rev = float(all_rev.min())
-    max_rev = float(all_rev.max())
-    rev_range = max(max_rev - min_rev, 1.0)
-
-    ref_price = DEFAULT_WTI if ctrl["fuel"] == "crude_oil" else DEFAULT_HENRY_HUB
-    price_label = f"${ref_price:.0f}/bbl" if ctrl["fuel"] == "crude_oil" else f"${ref_price:.2f}/MMBtu"
-    fuel_label = "oil" if ctrl["fuel"] == "crude_oil" else "gas"
-    prod_label = _fmt_production(base_production, ctrl["fuel"])
-    if ctrl["fuel"] == "crude_oil":
-        baseline_rev = base_production * 1000 * 365 * ref_price
-    else:
-        baseline_rev = base_production * 1_000_000 * ref_price
-
-    actual_dr_note = (
-        f" Region's 5-yr trailing decline rate: <b>{actual_dr:.1f}%/yr</b> (amber row)."
-        if actual_row_label else ""
-    )
-
-    st.markdown(
-        f"""
-        <div style="
-            border:1px solid #d6dce8;
-            border-radius:16px;
-            background:#f4f6fa;
-            padding:24px 24px 18px 24px;
-            margin-top:4px;
-        ">
-            <div style="font-size:22px;font-weight:700;color:#172036;margin-bottom:4px;">
-                Production sensitivity · {region_label} {fuel_label} · {ctrl['year']}
-            </div>
-            <div style="font-size:15px;color:#5f708a;line-height:1.45;margin-bottom:16px;">
-                OLS baseline: <b>{prod_label}</b> at year {ctrl['year']} (model trained through {int(trained_year)}).
-                At {price_label} → <b>{_fmt_billions(baseline_rev)}</b>/yr.{actual_dr_note}
-            </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    table_html = [
-        '<table style="width:100%;border-collapse:collapse;table-layout:fixed;background:#ffffff;">',
-        '<thead><tr>',
-        '<th style="text-align:right;padding:8px 10px;width:130px;color:#5f708a;font-size:13px;'
-        'border-bottom:2px solid #d6dce8;">Decline / Price</th>',
-    ]
-    for col in prod_df.columns:
-        table_html.append(
-            f'<th style="text-align:center;padding:8px 10px;color:#5f708a;font-size:13px;'
-            f'border-bottom:2px solid #d6dce8;">{col}</th>'
-        )
-    table_html.append('</tr></thead><tbody>')
-
-    for ridx in prod_df.index:
-        is_actual = ridx == actual_row_label
-        row_bg = "background:#fffbe6;" if is_actual else ""
-        left_border = "border-left:3px solid #d97706;" if is_actual else "border-left:1px solid #d6dce8;"
-        badge = " ← actual" if is_actual else ""
-
-        table_html.append(f'<tr style="{row_bg}">')
-        table_html.append(
-            f'<th style="text-align:right;padding:10px 8px;font-size:13px;font-weight:600;'
-            f'color:#5f708a;{left_border}">{ridx}{badge}</th>'
-        )
-        for cidx in prod_df.columns:
-            prod_val = float(prod_df.loc[ridx, cidx])
-            rev_val = float(rev_df.loc[ridx, cidx])
-            weight = (rev_val - min_rev) / rev_range
-            bg = _interpolate_hex("#f2dcdd", "#d9efe4", weight)
-            cell_border = "border:2px solid #d97706;" if is_actual else "border:1px solid transparent;"
-            prod_str = _fmt_production(prod_val, ctrl["fuel"])
-            rev_str = _fmt_billions(rev_val)
-            table_html.append(
-                f'<td style="text-align:center;padding:8px 6px;background:{bg};{cell_border}">'
-                f'<div style="font-size:15px;font-weight:700;color:#1a2033;">{prod_str}</div>'
-                f'<div style="font-size:11px;color:#5f708a;margin-top:2px;">{rev_str}/yr</div>'
-                f'</td>'
-            )
-        table_html.append('</tr>')
-
-    table_html.append('</tbody></table>')
-    st.markdown("".join(table_html), unsafe_allow_html=True)
-
-    with st.expander("📖 How to read this matrix", expanded=False):
         st.markdown(
             f"""
-**Axes**
-- **Rows (↓):** Annual decline rate scenarios applied from the model's training cutoff ({int(trained_year)}) to the selected year ({ctrl['year']}).
-  Negative = production growth; positive = production shrinking each year.
-  The amber-highlighted row is this region's historically-computed 5-year trailing decline rate — the most data-grounded scenario.
-- **Columns (→):** {"WTI crude price assumptions ($/bbl)" if ctrl["fuel"] == "crude_oil" else "Henry Hub gas price assumptions ($/MMBtu)"}
-
-**Each cell shows two values:**
-- **Large:** Projected Production ({("Mb/d" if ctrl["fuel"] == "crude_oil" else "MMcf")}) — `base_production × (1 − decline_rate)^years_ahead`
-- **Small below:** Estimated annual revenue at that price scenario
-
-**Color coding:** Red = weak revenue opportunity · Green = strong opportunity.
+- **X-axis:** {price_axis}.
+- **Y-axis:** Decline-rate adjustment to the OLS slope. Negative = steeper decline, positive = production grows faster.
+- **Cells:** Projected annual revenue (in $B) at year **{ctrl['year']}**, computed as
+  `production × price` where `production = (slope × (1 + decline_adj)) × year + intercept`.
+- **Color:** Red = weak opportunity · Green = strong opportunity.
             """
         )
-
-    st.markdown(
-        f"""
-            <div style="font-size:14px;color:#5f708a;line-height:1.35;margin-top:10px;">
-                Revenue formula: <code>base × (1 − decline)^years_ahead × price</code>.
-                Worst corner = <b>{_fmt_billions(min_rev)}</b> · Best corner = <b>{_fmt_billions(max_rev)}</b>.
-                Drag the year slider to explore sensitivities across the forecast horizon.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
 
 # ------------------------------------------------------------------ AI ANALYST
