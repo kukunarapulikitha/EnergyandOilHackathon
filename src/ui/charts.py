@@ -347,50 +347,55 @@ def small_multiples(
 def sensitivity_heatmap(
     forecast_row: pd.Series,
     target_year: int,
-    wti_range: tuple[float, float] = (40.0, 120.0),
-    wti_steps: int = 9,
+    price_range: tuple[float, float] | None = None,
+    price_steps: int = 9,
     decline_adj_range: tuple[float, float] = (-0.20, 0.20),
     decline_steps: int = 9,
 ) -> go.Figure:
-    """Heat map — revenue potential sensitivity to (WTI price × decline adjustment).
+    """Heat map — revenue sensitivity to (price × decline-rate adjustment).
 
-    Revenue = production_adjusted × 1000 bbl × 365 days × WTI
-    where production_adjusted = slope × (1 + decline_adj) × year + intercept.
-
-    Only meaningful for crude_oil rows (fuel_type must equal "crude_oil" for
-    revenue to make sense; gas rows produce volume-in-MMcf instead).
+    Production_adjusted = slope × (1 + decline_adj) × year + intercept.
+    Revenue (oil) = production × 1000 bbl × 365 × WTI ($/bbl).
+    Revenue (gas) = production × 1,000,000 × Henry Hub ($/MMBtu).
     """
-    wti_values = np.linspace(wti_range[0], wti_range[1], wti_steps)
+    fuel = forecast_row.get("fuel_type", "crude_oil")
+    is_oil = fuel == "crude_oil"
+
+    if price_range is None:
+        price_range = (40.0, 120.0) if is_oil else (2.0, 8.0)
+
+    price_values = np.linspace(price_range[0], price_range[1], price_steps)
     decline_values = np.linspace(decline_adj_range[0], decline_adj_range[1], decline_steps)
 
     slope = float(forecast_row["slope"])
     intercept = float(forecast_row["intercept"])
 
-    # Build Z matrix: rows = decline adjustments (bottom=negative), cols = WTI
-    z = np.zeros((decline_steps, wti_steps))
+    z = np.zeros((decline_steps, price_steps))
     for i, dadj in enumerate(decline_values):
-        # Lower decline (more negative dadj) = production grows faster
-        # Apply adjustment to slope
         adj_slope = slope * (1 + dadj)
-        production = adj_slope * target_year + intercept
-        production = max(production, 0)
-        for j, wti in enumerate(wti_values):
-            revenue = production * 1000 * 365 * wti  # USD / year
-            z[i, j] = revenue / 1e9  # convert to $ billion for readability
+        production = max(adj_slope * target_year + intercept, 0)
+        for j, price in enumerate(price_values):
+            if is_oil:
+                revenue = production * 1000 * 365 * price
+            else:
+                revenue = production * 1_000_000 * price
+            z[i, j] = revenue / 1e9  # $ billions
 
-    fuel = forecast_row.get("fuel_type", "crude_oil")
     region_name = forecast_row.get("region_name", forecast_row.get("region_id", "?"))
+    price_unit = "USD/bbl (WTI)" if is_oil else "USD/MMBtu (Henry Hub)"
+    price_fmt = (lambda p: f"${p:.0f}") if is_oil else (lambda p: f"${p:.2f}")
+    hover_price = "WTI: %{x}/bbl" if is_oil else "Henry Hub: %{x}/MMBtu"
 
     fig = go.Figure(
         go.Heatmap(
             z=z,
-            x=[f"${w:.0f}" for w in wti_values],
+            x=[price_fmt(p) for p in price_values],
             y=[f"{d*100:+.0f}%" for d in decline_values],
             colorscale="RdYlGn",
             zmid=float(np.median(z)) if z.size else 0,
             hovertemplate=(
-                "WTI: %{x}/bbl<br>"
-                "Slope adj: %{y}<br>"
+                f"{hover_price}<br>"
+                "Decline adj: %{y}<br>"
                 "Revenue: $%{z:,.2f}B<extra></extra>"
             ),
             colorbar=dict(title=dict(text="Revenue ($B/yr)", side="right")),
@@ -401,11 +406,11 @@ def sensitivity_heatmap(
     )
     fig.update_layout(
         title=(
-            f"Sensitivity: Revenue Potential at {target_year} — "
+            f"Sensitivity: Revenue at {target_year} — "
             f"{region_name} ({fuel.replace('_', ' ').title()})"
         ),
-        xaxis_title="WTI price assumption (USD/bbl)",
-        yaxis_title="Slope adjustment (decline/acceleration)",
+        xaxis_title=f"Price assumption ({price_unit})",
+        yaxis_title="Decline-rate adjustment (− = steeper decline · + = growth)",
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         margin=dict(l=120, r=80, t=70, b=60),

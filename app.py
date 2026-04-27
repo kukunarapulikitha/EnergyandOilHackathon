@@ -1086,53 +1086,48 @@ def tab_workspace(actuals, forecasts, annual_silver, ctrl):
         st.caption(f"ℹ️ {c}")
 
 
-def tab_sensitivity(actuals, forecasts, ctrl):
+def tab_sensitivity(actuals, forecasts, annual_silver, ctrl):
     st.subheader("🎛️ Sensitivity Analysis")
     st.caption(
-        "Stress-test the Projected Production Estimate under different WTI "
-        "price and decline-rate assumptions. Tied to the year selector in the "
-        "sidebar — drag it to explore sensitivity across the forecast horizon."
+        "Stress-test the forecast across decline-rate × price scenarios. "
+        "Red cells = weak revenue opportunity · green = strong. "
+        "Tied to the year slider — drag it to explore the horizon."
     )
 
-    if ctrl["fuel"] != "crude_oil":
-        st.info(
-            "Revenue sensitivity is only meaningful for crude oil. "
-            "Switch to 🛢️ Crude oil in the sidebar."
-        )
-        return
-
-    if not ctrl["regions"]:
-        st.info("Select a region in the sidebar.")
-        return
-
-    ff = forecasts[
-        (forecasts["fuel_type"] == ctrl["fuel"])
-        & (forecasts["region_id"].isin(ctrl["regions"]))
-    ]
-    if ff.empty:
-        st.warning("No forecasts available for the selected region.")
-        return
-
     fa = actuals[actuals["fuel_type"] == ctrl["fuel"]]
+    ff = forecasts[forecasts["fuel_type"] == ctrl["fuel"]]
+    if ctrl["regions"]:
+        ff = ff[ff["region_id"].isin(ctrl["regions"])]
+    if ff.empty:
+        st.info("No forecasts available for this fuel/region selection.")
+        return
 
-    # Pre-select map-clicked region if it's in the current fuel + region list
-    region_options = ff["region_id"].tolist()
-    pinned = st.session_state.get("map_focus_region")
-    pinned_fuel = st.session_state.get("map_focus_fuel")
+    # Shared region selection: map click → forecast tab selectbox → first sidebar region.
+    region_opts = ctrl["regions"] if ctrl["regions"] else ff["region_id"].tolist()
+    if not region_opts:
+        st.info("Select at least one region in the sidebar.")
+        return
+
+    focus_id = st.session_state.get("map_focus_region")
+    focus_fuel = st.session_state.get("map_focus_fuel")
+    forecast_pick = st.session_state.get("forecast_region_select")
+
     default_idx = 0
-    if pinned and pinned_fuel == ctrl["fuel"] and pinned in region_options:
-        default_idx = region_options.index(pinned)
-        st.caption(f"📍 Pre-selected from map click ({pinned}). Change via dropdown if needed.")
+    if focus_id and focus_fuel == ctrl["fuel"] and focus_id in region_opts:
+        default_idx = region_opts.index(focus_id)
+    elif forecast_pick and forecast_pick in region_opts:
+        default_idx = region_opts.index(forecast_pick)
 
     region_id = st.selectbox(
         "Region",
-        options=region_options,
+        options=region_opts,
         index=default_idx,
         format_func=lambda rid: (
             fa[fa["region_id"] == rid]["region_name"].iloc[0]
             if rid in fa["region_id"].values else rid
         ),
-        key="sensitivity_region",
+        key="sensitivity_region_select",
+        help="Click a state on the map or change the Forecast tab selection to sync.",
     )
 
     row = ff[ff["region_id"] == region_id].iloc[0]
@@ -1142,7 +1137,11 @@ def tab_sensitivity(actuals, forecasts, ctrl):
         use_container_width=True,
     )
 
-    with st.expander("📖 How to read this"):
+    with st.expander("📖 How to read this heat map"):
+        price_axis = (
+            "WTI crude price (USD/bbl)" if ctrl["fuel"] == "crude_oil"
+            else "Henry Hub gas price (USD/MMBtu)"
+        )
         st.markdown(
             """
             **X-axis:** WTI crude price assumption ($/bbl).
@@ -1530,10 +1529,9 @@ def main() -> None:
         with st.container(border=True):
             tab_regional_forecast(actuals, forecasts, annual_silver, ctrl)
 
-        # 4. Sensitivity heatmap (crude only)
-        if ctrl["fuel"] == "crude_oil":
-            with st.container(border=True):
-                tab_sensitivity(actuals, forecasts, ctrl)
+        # 4. Sensitivity heatmap
+        with st.container(border=True):
+            tab_sensitivity(actuals, forecasts, annual_silver, ctrl)
 
         # 5. Compare — expander so it doesn't clutter default view
         with st.expander("🆚 Compare regions", expanded=False):
